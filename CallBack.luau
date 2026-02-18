@@ -541,29 +541,6 @@ function CallBack.NewByIstance(): by_istance
 end
 
 -- ============================================================
--- for debugging
-function CallBack._DEBUG_Snapshot(mgr)
-	-- mgr is optional; pass a by_istance manager to also snapshot its registered table
-	return {
-		-- internal module-level state
-		cached_istance = cached_istance,
-		cached_player = cached_player,
-		istance_removing_connection = istance_removing_connection,
-		player_removed_connection = player_removed_connection,
-
-		-- optional: manager-level state
-		manager_registered = mgr and mgr.registered or nil,
-	}
-end
-
-function CallBack._DEBUG_CountRegistered(mgr)
-	local n = 0
-	for _ in pairs(mgr.registered) do n += 1 end
-	return n
-end
--- ============================================================
-
--- ============================================================
 -- Types
 -- ============================================================
 
