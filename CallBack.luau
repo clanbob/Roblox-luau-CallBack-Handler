@@ -84,7 +84,7 @@ local cached_istance = {}
 -- Player -> { registry, ... }
 local cached_player = {}
 
--- Instance -> connection (destroy event hook)
+-- RegisteredIstance -> connection (destroy event hook)
 local istance_removing_connection = {}
 
 -- Removes an entry from the proper cache.
