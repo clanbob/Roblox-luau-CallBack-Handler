@@ -103,18 +103,18 @@ local function clear_cach(instance, reg)
 		return
 	end
 
-	
+
 
 	if is_player then
 		cach[instance] = nil
-		
+
 		if not next(cach) and player_removed_connection then
 			player_removed_connection:Disconnect()
 			player_removed_connection = nil
 		end
 	elseif reg then
 		table.remove(cach[instance], table.find(cach[instance], reg))
-		
+
 		if instance_removing_connection[reg] then
 			instance_removing_connection[reg]:Disconnect()
 			instance_removing_connection[reg] = nil
@@ -163,7 +163,7 @@ local function new_removing_connection(event: RBXScriptSignal, reg, instance : I
 			registered_objects:Destroy(true)
 		end
 
-		clear_cach(instance)
+		clear_cach(instance, reg)
 	end)
 end
 
@@ -443,7 +443,7 @@ function registered:Destroy(dont_clear_cach: boolean)
 	local cach = self.is_player and cached_player or cached_instance
 
 	if cach[self.instance] and not dont_clear_cach then
-		clear_cach(self.instance)
+		clear_cach(self.instance, self)
 	end
 
 	table.clear(self.listener_list)
@@ -515,7 +515,7 @@ end
 function by_instance:Destroy()
 	for instance, reg in pairs(self.registered) do
 		reg:Destroy(true)
-		clear_cach(instance)
+		clear_cach(instance, reg)
 	end
 
 	table.clear(self.registered)
