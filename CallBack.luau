@@ -6,18 +6,6 @@
 	Purpose:
 		Mutation-safe callback dispatcher.
 
-	Features:
-		- One-shot listeners (once = true)
-		- Safe Disconnect() during Fire()
-		- Listeners added during Fire() are deferred to next cycle
-		- Supports global + per-instance/per-player registries
-		- Auto-cleanup when players leave / instances are destroyed
-
-	Notes:
-		- Callbacks execute asynchronously via task.spawn.
-		- Uses one reusable coroutine runner to reduce coroutine churn.
-		- Uses xpcall + traceback for error reporting.
-
 	Author:
 		TheRoyalDrew
 ]]
