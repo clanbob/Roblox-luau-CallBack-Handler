@@ -289,4 +289,3 @@ Expected: listeners added during an active fire pass become pending and run on t
 
 - Listener dispatch is asynchronous and resilient, optimized for correctness under mutation.
 - Cleanup uses reusable buffers in hot paths to reduce transient allocation churn.
-- If profiling shows this module as hot, optimize caller patterns first (reduce redundant `Fire`s, avoid high-frequency over-broad groups).
