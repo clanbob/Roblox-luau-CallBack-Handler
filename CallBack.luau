@@ -89,7 +89,7 @@ local instance_removing_connection = {}
 
 -- Removes an entry from the proper cache.
 -- Also disconnects any associated cleanup connection when no longer needed.
-local function clear_cach(instance)
+local function clear_cach(instance, reg)
 	local is_player = false
 
 	local cach
@@ -102,17 +102,21 @@ local function clear_cach(instance)
 		return
 	end
 
-	cach[instance] = nil
+	
 
 	if is_player then
+		cach[instance] = nil
+		
 		if not next(cach) and player_removed_connection then
 			player_removed_connection:Disconnect()
 			player_removed_connection = nil
 		end
-	else
-		if instance_removing_connection[instance] then
-			instance_removing_connection[instance]:Disconnect()
-			instance_removing_connection[instance] = nil
+	elseif reg then
+		table.remove(cach[instance], table.find(cach[instance], reg))
+		
+		if instance_removing_connection[reg] then
+			instance_removing_connection[reg]:Disconnect()
+			instance_removing_connection[reg] = nil
 		end
 	end
 end
