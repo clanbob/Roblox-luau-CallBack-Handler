@@ -1,7 +1,6 @@
 --[[
-	============================================================
+	
 	CALLBACK SYSTEM
-	============================================================
 
 	Purpose:
 		Mutation-safe callback dispatcher.
@@ -10,9 +9,6 @@
 		TheRoyalDrew
 ]]
 
--- ============================================================
--- Coroutine Runner
--- ============================================================
 
 -- Coroutine runner pattern inspired by @stravant thread-reuse approach.
 
@@ -57,22 +53,15 @@ local function run_listener_in_runner_thread(listener: Listener, ...)
 	task.spawn(free_runner_thread, listener.call_back, ...)
 end
 
--- ============================================================
--- Listener Index Generator
--- ============================================================
+
 
 -- Monotonic id used as a stable hash-key for listener storage tables.
 local index = 1
-
 local function generate_index()
 	local cached_index = index
 	index += 1
 	return cached_index
 end
-
--- ============================================================
--- Instance Cleanup Tracking
--- ============================================================
 
 -- Cleanup for registries:
 --   - Players: cleaned via Players.PlayerRemoving
@@ -190,15 +179,13 @@ local function new_removing_connection(event: RBXScriptSignal, reg)
 	end)
 end
 
--- ============================================================
 -- Batch Container
--- ============================================================
 
 -- Batch owns two listener sets:
 --   active  -> eligible this cycle
 --   pending -> added during Fire(); promoted after cycle
 --
--- Invariant: pending listeners never fire in the same cycle they were added.
+-- pending listeners never fire in the same cycle they were added.
 local batch = {}
 batch.__index = batch
 
@@ -296,9 +283,7 @@ function batch:Destroy()
 	self.caller_id = nil
 end
 
--- ============================================================
 -- Listener Class
--- ============================================================
 
 -- Listener handle returned by Listen().
 -- Supports explicit disconnection and direct callback execution.
@@ -351,9 +336,7 @@ function Listener:Fire(...)
 	run_listener_in_runner_thread(self, ...)
 end
 
--- ============================================================
--- Default Callback Group (Global Scope)
--- ============================================================
+-- Default Callback Group
 
 local default = {}
 default.__index = default
@@ -412,9 +395,7 @@ function default:Destroy()
 	setmetatable(self, nil)
 end
 
--- ============================================================
 -- Per-Player / Per-Instance Callback Group
--- ============================================================
 
 -- Registry object owning caller_id -> batch mappings for one player/instance key.
 local registered = {}
@@ -483,9 +464,7 @@ function registered:Destroy(dont_clear_cach: boolean)
 	setmetatable(self, nil)
 end
 
--- ============================================================
 -- By-Instance Interface
--- ============================================================
 
 local by_instance = {}
 by_instance.__index = by_instance
@@ -561,9 +540,8 @@ function by_instance:Destroy()
 	setmetatable(self, nil)
 end
 
--- ============================================================
--- Public Factory
--- ============================================================
+
+-- Public
 
 local CallBack = {}
 
@@ -591,10 +569,7 @@ function CallBack.NewByInstance(): by_instance
 	}, by_instance)
 end
 
-
--- ============================================================
 -- Types
--- ============================================================
 
 export type Listener = {
 	Disconnect: (self: Listener) -> (),
