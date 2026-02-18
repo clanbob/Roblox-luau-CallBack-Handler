@@ -8,8 +8,6 @@ This module supports three dispatcher styles:
 2. **Per-player dispatcher** (`CallBack.NewByPlayer()`, server-only)
 3. **Per-instance dispatcher** (`CallBack.NewByInstance()`) 
 
-> Backward compatibility: `NewByIstance()` and `UseCustomDestroyEventForIstance()` still exist as legacy aliases.
-
 ---
 
 ## Installation
