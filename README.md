@@ -149,4 +149,3 @@ Executes that specific listener callback asynchronously.
 ## Notes
 
 - `CallBack.NewByPlayer()` should only be used on the server. If called on the client, the module warns and returns `nil`.
-- Legacy aliases are still available: `NewByIstance` and `UseCustomDestroyEventForIstance`.
