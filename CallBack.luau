@@ -447,6 +447,9 @@ end
 local by_istance = {}
 by_istance.__index = by_istance
 
+-- NOTE: "Istance" names are kept for backward compatibility.
+-- Prefer the correctly spelled "Instance" method names.
+
 function by_istance:Listen(istance: Instance, caller_id: string, once: boolean, call_back: (...any) -> ())
 	if not self.registered[istance] then
 		self.registered[istance] = registered.New(self, istance, self.is_player)
@@ -501,6 +504,10 @@ function by_istance:UseCustomDestroyEventForIstance(istance: Instance, lock: boo
 	end
 end
 
+function by_istance:UseCustomDestroyEventForInstance(instance: Instance, lock: boolean, event: RBXScriptSignal)
+	return self:UseCustomDestroyEventForIstance(instance, lock, event)
+end
+
 function by_istance:Destroy()
 	for istance, reg in pairs(self.registered) do
 		reg:Destroy(true)
@@ -542,6 +549,10 @@ function CallBack.NewByIstance(): by_istance
 	}, by_istance)
 end
 
+function CallBack.NewByInstance(): by_istance
+	return CallBack.NewByIstance()
+end
+
 
 -- ============================================================
 -- Types
@@ -569,6 +580,7 @@ export type by_istance = {
 	Fire: (self: by_istance, istance: Instance, caller_id: string, ...any) -> (),
 	Listen: (self: by_istance, istance: Instance, caller_id: string, once: boolean, call_back: (...any) -> ()) -> Listener,
 	GetRegistered: (self: by_istance, istance: Instance) -> { listener_list: { [string]: Listener } },
+	UseCustomDestroyEventForInstance: (self: by_istance, instance: Instance, lock: boolean, event: RBXScriptSignal) -> (),
 	UseCustomDestroyEventForIstance: (self: by_istance, istance: Instance, lock: boolean, event: RBXScriptSignal) -> (),
 	Destroy: (self: by_istance) -> (),
 }
