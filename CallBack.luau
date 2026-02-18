@@ -542,6 +542,10 @@ function CallBack.NewByInstance(): by_instance
 	}, by_instance)
 end
 
+function CallBack.NewByInstance(): by_istance
+	return CallBack.NewByIstance()
+end
+
 
 -- ============================================================
 -- Types

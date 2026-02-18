@@ -149,4 +149,3 @@ Executes that specific listener callback asynchronously.
 ## Notes
 
 - `CallBack.NewByPlayer()` should only be used on the server. If called on the client, the module warns and returns `nil`.
-- API naming has been standardized to `Instance` across the module.
