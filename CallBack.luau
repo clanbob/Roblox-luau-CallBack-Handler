@@ -143,13 +143,13 @@ end
 
 -- Hooks a one-time destroy event for an instance (Destroying or custom).
 -- If a hook already exists, it is replaced (unless you lock it at a higher level).
-local function new_removing_connection(event: RBXScriptSignal, istance: Instance)
-	if istance_removing_connection[istance] then
-		istance_removing_connection[istance]:Disconnect()
-		istance_removing_connection[istance] = nil
+local function new_removing_connection(event: RBXScriptSignal, reg, istance : Instance)
+	if istance_removing_connection[reg] then
+		istance_removing_connection[reg]:Disconnect()
+		istance_removing_connection[reg] = nil
 	end
 
-	istance_removing_connection[istance] = event:Once(function()
+	istance_removing_connection[reg] = event:Once(function()
 		if not cached_istance[istance] then return end
 
 		for _, registered_objects in pairs(cached_istance[istance]) do
@@ -399,7 +399,7 @@ function registered.New(self, istance: Instance, is_player: boolean, destroy_eve
 	if is_player then
 		new_player_removing_connection()
 	else
-		new_removing_connection(destroy_event or istance.Destroying, istance)
+		new_removing_connection(destroy_event or istance.Destroying, reg, istance)
 	end
 
 	return reg
@@ -494,7 +494,7 @@ function by_istance:UseCustomDestroyEventForIstance(istance: Instance, lock: boo
 		self.registered[istance] = registered.New(self, istance, false, event)
 		self.registered[istance].lock_event = lock
 	elseif not self.registered[istance].lock_event then
-		new_removing_connection(event, istance)
+		new_removing_connection(event, self.registered[istance], istance)
 		self.registered[istance].lock_event = lock
 	end
 end
@@ -539,6 +539,7 @@ function CallBack.NewByIstance(): by_istance
 		registered = {},
 	}, by_istance)
 end
+
 
 -- ============================================================
 -- Types
