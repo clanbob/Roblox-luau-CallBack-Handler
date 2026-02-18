@@ -14,6 +14,8 @@
 -- Coroutine Runner
 -- ============================================================
 
+-- credit to @stravant for thread reuse desgin
+
 -- Shared coroutine used to execute callbacks.
 local free_runner_thread: thread
 
