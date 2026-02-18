@@ -182,7 +182,8 @@ function batch.New(self, caller_id)
 
 		is_firing = false,
 		pending = {},
-		active = {}
+		active = {},
+		clean_up_buffer = {}
 	}, batch)
 end
 
@@ -234,7 +235,7 @@ end
 
 -- After Fire(): remove disconnected/dirty listeners safely.
 function batch:CleanUpAfterFire()
-	local clean_up = {}
+	local clean_up = self.clean_up_buffer
 
 	for _, listener in pairs(self.active) do
 		if (not listener.connected) or listener.dirty then
@@ -246,6 +247,7 @@ function batch:CleanUpAfterFire()
 		listener:Disconnect()
 	end
 
+	table.clear(clean_up)
 	self:CleanUp()
 end
 
@@ -260,6 +262,7 @@ function batch:Destroy()
 
 	table.clear(self.pending)
 	table.clear(self.active)
+	table.clear(self.clean_up_buffer)
 
 	self.parent = nil
 	self.caller_id = nil
@@ -540,10 +543,6 @@ function CallBack.NewByInstance(): by_instance
 	return setmetatable({
 		registered = {},
 	}, by_instance)
-end
-
-function CallBack.NewByInstance(): by_istance
-	return CallBack.NewByIstance()
 end
 
 
