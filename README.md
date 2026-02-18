@@ -1,74 +1,152 @@
-CALLBACK MODULE
+# CallBack (Luau)
 
-Installation
+A mutation-safe callback dispatcher for Roblox/Luau.
 
+This module supports three dispatcher styles:
+
+1. **Global dispatcher** (`CallBack.New()`)
+2. **Per-player dispatcher** (`CallBack.NewByPlayer()`, server-only)
+3. **Per-instance dispatcher** (`CallBack.NewByInstance()`) 
+
+---
+
+## Installation
+
+```lua
 local CallBack = require(path.To.CallBack)
+```
 
-GLOBAL DISPATCHER
+---
 
-  Create: local Events = CallBack.New()
-  
-  Listen: local connection = Events:Listen(caller_id: string, once: boolean, callback: (...) -> ())
-  
-  -   caller_id: string key used to group listeners
-  -   once: if true, listener disconnects automatically before executing
-  -   callback: function executed when Fire() is called
-  
-  Fire: Events:Fire(caller_id: string, ...)
-  
-  Destroy: Events:Destroy()
-    -- destroys the event object
+## Quick Start
 
-PER-PLAYER DISPATCHER (SERVER ONLY)
+### Global dispatcher
 
-  -- auto cleans up when player leaves
-  -- cant use custom destroy sginals
-  
-  Create: local PlayerEvents = CallBack.NewByPlayer()
-  
-  Listen: PlayerEvents:Listen(player: Player, caller_id: string, once: boolean, callback: callback: (...) -> ())
-  
-  Fire: PlayerEvents:Fire(player: Player, caller_id: string, ...)
-  
-  Get Registry: PlayerEvents:GetRegistered(player: Player)
-    -- returns a registry for the player with method :Destroy
-    :Destroy disconnects all listeners for that player
-  
-  Destroy: PlayerEvents:Destroy()
+```lua
+local Events = CallBack.New()
 
-PER-INSTANCE DISPATCHER
+local connection = Events:Listen("Damage", false, function(amount, source)
+	print("Damage:", amount, "from", source)
+end)
 
-  -- cleans up when istance is destroyed or from provided custom destroy signal
-  
-  Create: local InstEvents = CallBack.NewByIstance()
-  
-  Listen: InstEvents:Listen(instance: Instance, caller_id: string, once:boolean, callback: callback: (...) -> ())
-  
-  Fire: InstEvents:Fire(instance: Instance, caller_id: string, ...)
-  
-  Get Registry: InstEvents:GetRegistered(instance: Instance)
-  -- returns a registry for the istance with method :Destroy
-    :Destroy disconnects all listeners and resets the destroyed singal.
-    if istance gets re-regristered it will resault to the default destroy sginal.
-  
-  Custom Destroy Event: InstEvents:UseCustomDestroyEventForIstance(instance: Instance, lock: boolean, event: RBXScriptSignal )
-  
-  -   instance: registry owner
-  -   lock: if true, destroy event cannot be replaced
-  -   event: signal that triggers registry destruction
-  
-  Destroy: InstEvents:Destroy()
+Events:Fire("Damage", 25, "Trap")
 
-LISTENER OBJECT
+connection:Disconnect()
+Events:Destroy()
+```
 
-Returned from Listen().
+### Per-player dispatcher (server only)
 
-  Methods: connection:Disconnect() connection:Fire(…)
+```lua
+local PlayerEvents = CallBack.NewByPlayer()
 
-BEHAVIOR GUARANTEES
+PlayerEvents:Listen(player, "InventoryUpdated", false, function(itemName)
+	print(player.Name, "updated item", itemName)
+end)
 
-  -   Disconnect() is safe during Fire()
-  -   Listeners added during Fire() execute next cycle
-  -   once = true auto-disconnects
-  -   All callbacks execute asynchronously
-  -   Errors include full traceback
+PlayerEvents:Fire(player, "InventoryUpdated", "Sword")
+```
+
+### Per-instance dispatcher
+
+```lua
+local InstEvents = CallBack.NewByInstance()
+
+InstEvents:Listen(part, "Touched", false, function(hit)
+	print("Part touched by", hit.Name)
+end)
+
+InstEvents:Fire(part, "Touched", workspace.Baseplate)
+```
+
+---
+
+## API
+
+### `CallBack.New()`
+Creates a global dispatcher.
+
+### `:Listen(caller_id: string, once: boolean, callback: (...any) -> ()) -> Listener`
+Registers a listener for `caller_id`.
+
+- `caller_id`: channel/group key
+- `once`: if `true`, listener disconnects before first execution
+- `callback`: function to run on fire
+
+### `:Fire(caller_id: string, ...any)`
+Dispatches all active listeners registered to `caller_id`.
+
+### `:Destroy()`
+Destroys all listeners and batches for this dispatcher.
+
+---
+
+### `CallBack.NewByPlayer()` (server only)
+Creates a player-scoped dispatcher. Internally cleans up when `Players.PlayerRemoving` fires.
+
+### `:Listen(player: Player, caller_id: string, once: boolean, callback: (...any) -> ()) -> Listener`
+Registers a listener under one player + caller group.
+
+### `:Fire(player: Player, caller_id: string, ...any)`
+Fires listeners for a specific player and caller group.
+
+### `:GetRegistered(player: Player)`
+Returns the internal registry object for that player (if present).
+
+### `:Destroy()`
+Destroys all player registries and listeners.
+
+---
+
+### `CallBack.NewByInstance()`
+Creates an instance-scoped dispatcher. By default, each instance registry auto-cleans on `Instance.Destroying`.
+
+### `:Listen(instance: Instance, caller_id: string, once: boolean, callback: (...any) -> ()) -> Listener`
+Registers a listener under one instance + caller group.
+
+### `:Fire(instance: Instance, caller_id: string, ...any)`
+Fires listeners for a specific instance and caller group.
+
+### `:GetRegistered(instance: Instance)`
+Returns the internal registry object for that instance (if present).
+
+### `:UseCustomDestroyEventForInstance(instance: Instance, lock: boolean, event: RBXScriptSignal)`
+Overrides cleanup signal for a specific instance.
+
+- `instance`: registry owner
+- `lock`: if `true`, the destroy event cannot be replaced later
+- `event`: signal that triggers registry destruction
+
+> Not available for `NewByPlayer()`; calling this for player dispatchers raises an error.
+
+### `:Destroy()`
+Destroys all instance registries and listeners.
+
+---
+
+## Listener object
+
+Returned by every `:Listen(...)` call.
+
+### `connection:Disconnect()`
+Disconnects the listener.
+
+### `connection:Fire(...any)`
+Executes that specific listener callback asynchronously.
+
+---
+
+## Behavior guarantees
+
+- Safe disconnect during fire cycles.
+- Listeners added during an active `:Fire()` are queued for the next cycle.
+- `once = true` listeners auto-disconnect before running.
+- Callback execution is asynchronous (`task.spawn` via a shared runner coroutine).
+- Callback errors are wrapped and surfaced with traceback via `warn`.
+
+---
+
+## Notes
+
+- `CallBack.NewByPlayer()` should only be used on the server. If called on the client, the module warns and returns `nil`.
+- API naming has been standardized to `Instance` across the module.

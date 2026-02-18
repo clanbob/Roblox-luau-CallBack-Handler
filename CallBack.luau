@@ -79,30 +79,30 @@ end
 local player_removed_connection: RBXScriptConnection
 
 -- Instance -> { registry, ... } (non-player instances)
-local cached_istance = {}
+local cached_instance = {}
 
 -- Player -> { registry, ... }
 local cached_player = {}
 
--- RegisteredIstance -> connection (destroy event hook)
-local istance_removing_connection = {}
+-- RegisteredInstance -> connection (destroy event hook)
+local instance_removing_connection = {}
 
 -- Removes an entry from the proper cache.
 -- Also disconnects any associated cleanup connection when no longer needed.
-local function clear_cach(istance)
+local function clear_cach(instance)
 	local is_player = false
 
 	local cach
-	if cached_istance[istance] then
-		cach = cached_istance
-	elseif cached_player[istance] then
+	if cached_instance[instance] then
+		cach = cached_instance
+	elseif cached_player[instance] then
 		cach = cached_player
 		is_player = true
 	else
 		return
 	end
 
-	cach[istance] = nil
+	cach[instance] = nil
 
 	if is_player then
 		if not next(cach) and player_removed_connection then
@@ -110,22 +110,22 @@ local function clear_cach(istance)
 			player_removed_connection = nil
 		end
 	else
-		if istance_removing_connection[istance] then
-			istance_removing_connection[istance]:Disconnect()
-			istance_removing_connection[istance] = nil
+		if instance_removing_connection[instance] then
+			instance_removing_connection[instance]:Disconnect()
+			instance_removing_connection[instance] = nil
 		end
 	end
 end
 
 -- Registers a registry under either the player cache or instance cache.
-local function add_to_cache(istance: Instance, registry, is_player: boolean)
-	local cach = is_player and cached_player or cached_istance
+local function add_to_cache(instance: Instance, registry, is_player: boolean)
+	local cach = is_player and cached_player or cached_instance
 
-	if not cach[istance] then
-		cach[istance] = {}
+	if not cach[instance] then
+		cach[instance] = {}
 	end
 
-	table.insert(cach[istance], registry)
+	table.insert(cach[instance], registry)
 end
 
 -- Ensures PlayerRemoving is connected once.
@@ -145,20 +145,20 @@ end
 
 -- Hooks a one-time destroy event for an instance (Destroying or custom).
 -- If a hook already exists, it is replaced (unless you lock it at a higher level).
-local function new_removing_connection(event: RBXScriptSignal, reg, istance : Instance)
-	if istance_removing_connection[reg] then
-		istance_removing_connection[reg]:Disconnect()
-		istance_removing_connection[reg] = nil
+local function new_removing_connection(event: RBXScriptSignal, instance : Instance)
+	if instance_removing_connection[instance] then
+		instance_removing_connection[instance]:Disconnect()
+		instance_removing_connection[instance] = nil
 	end
 
-	istance_removing_connection[reg] = event:Once(function()
-		if not cached_istance[istance] then return end
+	instance_removing_connection[instance] = event:Once(function()
+		if not cached_instance[instance] then return end
 
-		for _, registered_objects in pairs(cached_istance[istance]) do
+		for _, registered_objects in pairs(cached_instance[instance]) do
 			registered_objects:Destroy(true)
 		end
 
-		clear_cach(istance)
+		clear_cach(instance)
 	end)
 end
 
@@ -182,7 +182,8 @@ function batch.New(self, caller_id)
 
 		is_firing = false,
 		pending = {},
-		active = {}
+		active = {},
+		clean_up_buffer = {}
 	}, batch)
 end
 
@@ -234,7 +235,7 @@ end
 
 -- After Fire(): remove disconnected/dirty listeners safely.
 function batch:CleanUpAfterFire()
-	local clean_up = {}
+	local clean_up = self.clean_up_buffer
 
 	for _, listener in pairs(self.active) do
 		if (not listener.connected) or listener.dirty then
@@ -246,6 +247,7 @@ function batch:CleanUpAfterFire()
 		listener:Disconnect()
 	end
 
+	table.clear(clean_up)
 	self:CleanUp()
 end
 
@@ -260,6 +262,7 @@ function batch:Destroy()
 
 	table.clear(self.pending)
 	table.clear(self.active)
+	table.clear(self.clean_up_buffer)
 
 	self.parent = nil
 	self.caller_id = nil
@@ -387,21 +390,21 @@ registered.__index = registered
 
 -- Creates a new registry and enrolls it into cleanup caches.
 -- Note: the first destroy event hooked "wins" unless you replace it later (and it's not locked).
-function registered.New(self, istance: Instance, is_player: boolean, destroy_event: RBXScriptSignal)
+function registered.New(self, instance: Instance, is_player: boolean, destroy_event: RBXScriptSignal)
 	local reg = setmetatable({
 		listener_list = {},
-		istance = istance,
+		instance = instance,
 		parent = self,
 
 		is_player = is_player,
 	}, registered)
 
-	add_to_cache(istance, reg, is_player)
+	add_to_cache(instance, reg, is_player)
 
 	if is_player then
 		new_player_removing_connection()
 	else
-		new_removing_connection(destroy_event or istance.Destroying, reg, istance)
+		new_removing_connection(destroy_event or instance.Destroying, instance)
 	end
 
 	return reg
@@ -428,35 +431,35 @@ end
 -- Destroys this registry.
 -- dont_clear_cach=true is used by cleanup handlers that already clear the cache key.
 function registered:Destroy(dont_clear_cach: boolean)
-	local cach = self.is_player and cached_player or cached_istance
+	local cach = self.is_player and cached_player or cached_instance
 
-	if cach[self.istance] and not dont_clear_cach then
-		clear_cach(self.istance)
+	if cach[self.instance] and not dont_clear_cach then
+		clear_cach(self.instance)
 	end
 
 	table.clear(self.listener_list)
 	setmetatable(self, nil)
 
-	self.parent.registered[self.istance] = nil
+	self.parent.registered[self.instance] = nil
 end
 
 -- ============================================================
 -- By-Instance Interface
 -- ============================================================
 
-local by_istance = {}
-by_istance.__index = by_istance
+local by_instance = {}
+by_instance.__index = by_instance
 
-function by_istance:Listen(istance: Instance, caller_id: string, once: boolean, call_back: (...any) -> ())
-	if not self.registered[istance] then
-		self.registered[istance] = registered.New(self, istance, self.is_player)
+function by_instance:Listen(instance: Instance, caller_id: string, once: boolean, call_back: (...any) -> ())
+	if not self.registered[instance] then
+		self.registered[instance] = registered.New(self, instance, self.is_player)
 	end
 
-	return self.registered[istance]:Connect(caller_id, once, call_back)
+	return self.registered[instance]:Connect(caller_id, once, call_back)
 end
 
-function by_istance:Fire(istance: Instance, caller_id: string, ...)
-	local reg = self.registered[istance]
+function by_instance:Fire(instance: Instance, caller_id: string, ...)
+	local reg = self.registered[instance]
 	if not reg then return end
 
 	local batch = reg.listener_list[caller_id]
@@ -481,30 +484,30 @@ function by_istance:Fire(istance: Instance, caller_id: string, ...)
 	batch:CleanUpAfterFire()
 end
 
-function by_istance:GetRegistered(istance: Instance)
-	return self.registered[istance]
+function by_instance:GetRegistered(instance: Instance)
+	return self.registered[instance]
 end
 
 -- Allows setting a custom destroy signal for an instance registry.
 -- lock=true prevents future overrides for that instance.
-function by_istance:UseCustomDestroyEventForIstance(istance: Instance, lock: boolean, event: RBXScriptSignal)
+function by_instance:UseCustomDestroyEventForInstance(instance: Instance, lock: boolean, event: RBXScriptSignal)
 	if self.is_player then
 		error("players can not have custom destroyed events")
 	end
 
-	if not self.registered[istance] then
-		self.registered[istance] = registered.New(self, istance, false, event)
-		self.registered[istance].lock_event = lock
-	elseif not self.registered[istance].lock_event then
-		new_removing_connection(event, self.registered[istance], istance)
-		self.registered[istance].lock_event = lock
+	if not self.registered[instance] then
+		self.registered[instance] = registered.New(self, instance, false, event)
+		self.registered[instance].lock_event = lock
+	elseif not self.registered[instance].lock_event then
+		new_removing_connection(event, instance)
+		self.registered[instance].lock_event = lock
 	end
 end
 
-function by_istance:Destroy()
-	for istance, reg in pairs(self.registered) do
+function by_instance:Destroy()
+	for instance, reg in pairs(self.registered) do
 		reg:Destroy(true)
-		clear_cach(istance)
+		clear_cach(instance)
 	end
 
 	table.clear(self.registered)
@@ -524,7 +527,7 @@ function CallBack.New(): default
 	}, default)
 end
 
-function CallBack.NewByPlayer(): by_istance
+function CallBack.NewByPlayer(): by_instance
 	if not game:GetService("RunService"):IsServer() then
 		warn("CallBack.NewByPlayer() should only used from the server")
 		return
@@ -533,13 +536,13 @@ function CallBack.NewByPlayer(): by_istance
 	return setmetatable({
 		registered = {},
 		is_player = true
-	}, by_istance)
+	}, by_instance)
 end
 
-function CallBack.NewByIstance(): by_istance
+function CallBack.NewByInstance(): by_instance
 	return setmetatable({
 		registered = {},
-	}, by_istance)
+	}, by_instance)
 end
 
 
@@ -559,18 +562,18 @@ export type default = {
 }
 
 export type by_player = {
-	Fire: (self: by_istance, player: Player, caller_id: string, ...any) -> (),
-	Listen: (self: by_istance, player: Player, caller_id: string, once: boolean, call_back: (...any) -> ()) -> Listener,
-	GetRegistered: (self: by_istance, player: Player) -> { listener_list: { [string]: Listener } },
-	Destroy: (self: by_istance) -> (),
+	Fire: (self: by_instance, player: Player, caller_id: string, ...any) -> (),
+	Listen: (self: by_instance, player: Player, caller_id: string, once: boolean, call_back: (...any) -> ()) -> Listener,
+	GetRegistered: (self: by_instance, player: Player) -> { listener_list: { [string]: Listener } },
+	Destroy: (self: by_instance) -> (),
 }
 
-export type by_istance = {
-	Fire: (self: by_istance, istance: Instance, caller_id: string, ...any) -> (),
-	Listen: (self: by_istance, istance: Instance, caller_id: string, once: boolean, call_back: (...any) -> ()) -> Listener,
-	GetRegistered: (self: by_istance, istance: Instance) -> { listener_list: { [string]: Listener } },
-	UseCustomDestroyEventForIstance: (self: by_istance, istance: Instance, lock: boolean, event: RBXScriptSignal) -> (),
-	Destroy: (self: by_istance) -> (),
+export type by_instance = {
+	Fire: (self: by_instance, instance: Instance, caller_id: string, ...any) -> (),
+	Listen: (self: by_instance, instance: Instance, caller_id: string, once: boolean, call_back: (...any) -> ()) -> Listener,
+	GetRegistered: (self: by_instance, instance: Instance) -> { listener_list: { [string]: Listener } },
+	UseCustomDestroyEventForInstance: (self: by_instance, instance: Instance, lock: boolean, event: RBXScriptSignal) -> (),
+	Destroy: (self: by_instance) -> (),
 }
 
 return CallBack
