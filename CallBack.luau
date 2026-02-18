@@ -607,17 +607,21 @@ export type default = {
 	Destroy: (self: default) -> (),
 }
 
+export type reg = {
+	Destroy: (self: reg) -> (),
+}
+
 export type by_player = {
 	Fire: (self: by_instance, player: Player, caller_id: string, ...any) -> (),
 	Listen: (self: by_instance, player: Player, caller_id: string, once: boolean, call_back: (...any) -> ()) -> Listener,
-	GetRegistered: (self: by_instance, player: Player) -> { listener_list: { [string]: Listener } },
+	GetRegistered: (self: by_instance, player: Player) -> reg,
 	Destroy: (self: by_instance) -> (),
 }
 
 export type by_instance = {
 	Fire: (self: by_instance, instance: Instance, caller_id: string, ...any) -> (),
 	Listen: (self: by_instance, instance: Instance, caller_id: string, once: boolean, call_back: (...any) -> ()) -> Listener,
-	GetRegistered: (self: by_instance, instance: Instance) -> { listener_list: { [string]: Listener } },
+	GetRegistered: (self: by_instance, instance: Instance) -> reg,
 	UseCustomDestroyEventForInstance: (self: by_instance, instance: Instance, lock: boolean, event: RBXScriptSignal) -> (),
 	Destroy: (self: by_instance) -> (),
 }
