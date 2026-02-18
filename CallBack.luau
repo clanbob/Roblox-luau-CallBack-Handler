@@ -14,13 +14,14 @@
 -- Coroutine Runner
 -- ============================================================
 
--- credit to @stravant for thread reuse desgin
+-- Coroutine runner pattern inspired by @stravant thread-reuse approach.
 
--- Shared coroutine used to execute callbacks.
+-- Shared coroutine reused to execute callbacks without creating a new coroutine per listener.
 local free_runner_thread: thread
 
--- Executes a callback under xpcall with traceback.
--- free_runner_thread is temporarily cleared to avoid re-entrancy reuse.
+-- Executes one callback via xpcall + traceback.
+-- The free runner is temporarily detached to avoid accidental re-entrancy reuse
+-- while this callback is in progress.
 local function run(call_back: (...any) -> (), ...)
 	local cached_runner_thread = free_runner_thread
 	free_runner_thread = nil
@@ -38,16 +39,16 @@ local function run(call_back: (...any) -> (), ...)
 	free_runner_thread = cached_runner_thread
 end
 
--- Runner coroutine body: waits for (callback, ...) then calls run(callback, ...).
+-- Runner coroutine body: waits for (callback, ...) and then executes it through run().
 local function wait_for_work()
 	while true do
 		run(coroutine.yield())
 	end
 end
 
--- Dispatches a listener callback using the shared runner coroutine.
--- Runner is created + primed on first use.
-local function run_lisenter_in_runner_thread(listener: Listener, ...)
+-- Dispatches a listener callback via the shared runner coroutine.
+-- The runner is lazily created and primed on first dispatch.
+local function run_listener_in_runner_thread(listener: Listener, ...)
 	if not free_runner_thread then
 		free_runner_thread = coroutine.create(wait_for_work)
 		coroutine.resume(free_runner_thread) -- prime to first yield
@@ -60,7 +61,7 @@ end
 -- Listener Index Generator
 -- ============================================================
 
--- Monotonic id used as a stable key for listeners.
+-- Monotonic id used as a stable hash-key for listener storage tables.
 local index = 1
 
 local function generate_index()
@@ -132,7 +133,7 @@ local function add_to_cache(instance: Instance, registry, is_player: boolean)
 	table.insert(cach[instance], registry)
 end
 
--- Ensures PlayerRemoving is connected once.
+-- Ensures PlayerRemoving hook is connected once globally for this module state.
 local function new_player_removing_connection()
 	if player_removed_connection then return end
 
@@ -276,12 +277,13 @@ end
 -- Listener Class
 -- ============================================================
 
--- Listener handle returned to callers.
--- Supports :Disconnect() and :Fire()
+-- Listener handle returned by Listen().
+-- Supports explicit disconnection and direct callback execution.
 local Listener = {}
 Listener.__index = Listener
 
--- pending=true means it was created during an active Fire() cycle.
+-- pending=true means the listener was created during an active Fire() cycle
+-- and must not run until the next cycle.
 function Listener.New(self, call_back: (...any) -> (), index: number, once: boolean, pending: boolean)
 	return setmetatable({
 		call_back = call_back,
@@ -295,7 +297,9 @@ function Listener.New(self, call_back: (...any) -> (), index: number, once: bool
 	}, Listener)
 end
 
--- Disconnects immediately unless batch is currently firing (then marks dirty).
+-- Disconnect behavior:
+--   - if not firing: remove immediately
+--   - if firing: mark dirty and defer structural cleanup until post-fire
 function Listener:Disconnect()
 	if not self.connected then return end
 	self.connected = false
@@ -309,7 +313,8 @@ function Listener:Disconnect()
 	end
 end
 
--- Fires asynchronously. once listeners disconnect before dispatch.
+-- Fires this one listener asynchronously.
+-- `once` listeners disconnect before dispatch to guarantee at-most-once execution.
 function Listener:Fire(...)
 	if self.pending then
 		warn("Attempted to execute a pending listener during active firing.")
@@ -320,7 +325,7 @@ function Listener:Fire(...)
 		self:Disconnect()
 	end
 
-	run_lisenter_in_runner_thread(self, ...)
+	run_listener_in_runner_thread(self, ...)
 end
 
 -- ============================================================
@@ -388,7 +393,7 @@ end
 -- Per-Player / Per-Instance Callback Group
 -- ============================================================
 
--- Registry holding batches scoped to one instance/player.
+-- Registry object owning caller_id -> batch mappings for one player/instance key.
 local registered = {}
 registered.__index = registered
 
@@ -433,7 +438,7 @@ function registered:Connect(caller_id: string, once: boolean, call_back: (...any
 end
 
 -- Destroys this registry.
--- dont_clear_cach=true is used by cleanup handlers that already clear the cache key.
+-- dont_clear_cach=true is used by cleanup handlers that already removed the cache key.
 function registered:Destroy(dont_clear_cach: boolean)
 	local cach = self.is_player and cached_player or cached_instance
 
@@ -442,7 +447,6 @@ function registered:Destroy(dont_clear_cach: boolean)
 	end
 
 	table.clear(self.listener_list)
-	setmetatable(self, nil)
 
 	self.parent.registered[self.instance] = nil
 end
