@@ -85,39 +85,69 @@ local cached_instance = {}
 -- Player -> { registry, ... }
 local cached_player = {}
 
--- RegisteredInstance -> connection (destroy event hook)
+-- Registered registry -> connection (destroy event hook)
+-- NOTE:
+--   This is keyed by registry object (not by instance) so different
+--   dispatchers/registries that reference the same instance can still
+--   own different destroy signals safely.
 local instance_removing_connection = {}
 
--- Removes an entry from the proper cache.
--- Also disconnects any associated cleanup connection when no longer needed.
-local function clear_cach(instance, reg)
-	local is_player = false
+-- Removes one registry from its owning instance/player cache bucket.
+-- If the bucket becomes empty, it removes the bucket key entirely.
+-- For players, also tears down PlayerRemoving when no player registries remain.
+local function remove_registry_from_cache(instance: Instance, registry, is_player: boolean)
+	local cach = is_player and cached_player or cached_instance
+	local registries = cach[instance]
+	if not registries then return end
 
-	local cach
+	for i = #registries, 1, -1 do
+		if registries[i] == registry then
+			-- O(1) swap-remove; registry order is not semantically important.
+			local last = #registries
+			registries[i] = registries[last]
+			registries[last] = nil
+			break
+		end
+	end
+
+	if not next(registries) then
+		cach[instance] = nil
+
+		if is_player then
+			if not next(cach) and player_removed_connection then
+				player_removed_connection:Disconnect()
+				player_removed_connection = nil
+			end
+		end
+	end
+end
+
+local function disconnect_instance_connection(registry)
+	local connection = instance_removing_connection[registry]
+	if not connection then return end
+
+	connection:Disconnect()
+	instance_removing_connection[registry] = nil
+end
+
+-- Clears an entire cache key (instance or player) and all associated cleanup hooks.
+-- Used by global cleanup flows where every registry under the key is being removed.
+local function clear_cach(instance)
 	if cached_instance[instance] then
-		cach = cached_instance
-	elseif cached_player[instance] then
-		cach = cached_player
-		is_player = true
-	else
+		for _, registry in pairs(cached_instance[instance]) do
+			disconnect_instance_connection(registry)
+		end
+
+		cached_instance[instance] = nil
 		return
 	end
 
+	if cached_player[instance] then
+		cached_player[instance] = nil
 
-
-	if is_player then
-		cach[instance] = nil
-
-		if not next(cach) and player_removed_connection then
+		if not next(cached_player) and player_removed_connection then
 			player_removed_connection:Disconnect()
 			player_removed_connection = nil
-		end
-	elseif reg then
-		table.remove(cach[instance], table.find(cach[instance], reg))
-
-		if instance_removing_connection[reg] then
-			instance_removing_connection[reg]:Disconnect()
-			instance_removing_connection[reg] = nil
 		end
 	end
 end
@@ -148,22 +178,15 @@ local function new_player_removing_connection()
 	end)
 end
 
--- Hooks a one-time destroy event for an instance (Destroying or custom).
--- If a hook already exists, it is replaced (unless you lock it at a higher level).
-local function new_removing_connection(event: RBXScriptSignal, reg, instance : Instance)
-	if instance_removing_connection[reg] then
-		instance_removing_connection[reg]:Disconnect()
-		instance_removing_connection[reg] = nil
-	end
+-- Hooks a one-time destroy event for a specific registry.
+-- If this registry already has a hook, it is replaced.
+-- Important: the hook destroys only that registry, not every registry under the instance.
+local function new_removing_connection(event: RBXScriptSignal, reg)
+	disconnect_instance_connection(reg)
 
 	instance_removing_connection[reg] = event:Once(function()
-		if not cached_instance[instance] then return end
-
-		for _, registered_objects in pairs(cached_instance[instance]) do
-			registered_objects:Destroy(true)
-		end
-
-		clear_cach(instance, reg)
+		if reg.destroyed then return end
+		reg:Destroy()
 	end)
 end
 
@@ -397,8 +420,8 @@ end
 local registered = {}
 registered.__index = registered
 
--- Creates a new registry and enrolls it into cleanup caches.
--- Note: the first destroy event hooked "wins" unless you replace it later (and it's not locked).
+-- Creates a registry and enrolls it into ownership caches.
+-- For instance registries, attaches the initial destroy signal (default: Destroying).
 function registered.New(self, instance: Instance, is_player: boolean, destroy_event: RBXScriptSignal)
 	local reg = setmetatable({
 		listener_list = {},
@@ -413,7 +436,7 @@ function registered.New(self, instance: Instance, is_player: boolean, destroy_ev
 	if is_player then
 		new_player_removing_connection()
 	else
-		new_removing_connection(destroy_event or instance.Destroying, reg, instance)
+		new_removing_connection(destroy_event or instance.Destroying, reg)
 	end
 
 	return reg
@@ -440,15 +463,24 @@ end
 -- Destroys this registry.
 -- dont_clear_cach=true is used by cleanup handlers that already removed the cache key.
 function registered:Destroy(dont_clear_cach: boolean)
-	local cach = self.is_player and cached_player or cached_instance
+	if self.destroyed then return end
+	self.destroyed = true
 
-	if cach[self.instance] and not dont_clear_cach then
-		clear_cach(self.instance, self)
+	if not self.is_player then
+		disconnect_instance_connection(self)
+	end
+
+	if not dont_clear_cach then
+		remove_registry_from_cache(self.instance, self, self.is_player)
 	end
 
 	table.clear(self.listener_list)
 
-	self.parent.registered[self.instance] = nil
+	if self.parent then
+		self.parent.registered[self.instance] = nil
+	end
+
+	setmetatable(self, nil)
 end
 
 -- ============================================================
@@ -496,8 +528,8 @@ function by_instance:GetRegistered(instance: Instance)
 	return self.registered[instance]
 end
 
--- Allows setting a custom destroy signal for an instance registry.
--- lock=true prevents future overrides for that instance.
+-- Sets a custom destroy signal for one instance registry.
+-- lock=true prevents replacing that signal later for this registry.
 function by_instance:UseCustomDestroyEventForInstance(instance: Instance, lock: boolean, event: RBXScriptSignal)
 	if self.is_player then
 		error("players can not have custom destroyed events")
@@ -507,17 +539,23 @@ function by_instance:UseCustomDestroyEventForInstance(instance: Instance, lock: 
 		self.registered[instance] = registered.New(self, instance, false, event)
 		self.registered[instance].lock_event = lock
 	elseif not self.registered[instance].lock_event then
-		new_removing_connection(event, self.registered[instance], instance)
+		new_removing_connection(event, self.registered[instance])
 		self.registered[instance].lock_event = lock
 	end
 end
 
 function by_instance:Destroy()
-	for instance, reg in pairs(self.registered) do
-		reg:Destroy(true)
-		clear_cach(instance, reg)
+	-- Copy first to avoid mutating self.registered while iterating it.
+	local to_destroy = {}
+	for _, reg in pairs(self.registered) do
+		table.insert(to_destroy, reg)
 	end
 
+	for _, reg in ipairs(to_destroy) do
+		reg:Destroy()
+	end
+
+	table.clear(to_destroy)
 	table.clear(self.registered)
 	table.clear(self)
 	setmetatable(self, nil)
