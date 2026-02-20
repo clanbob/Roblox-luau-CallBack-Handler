@@ -402,6 +402,10 @@ function default:Destroy()
 	setmetatable(self, nil)
 end
 
+function default:GetListenerBatch(caller_id : string): batch
+	return self.listener_list[caller_id]
+end
+
 -- returns false if no active lisenters, else true	
 function default:CheckStatus(caller_id : string): boolean	
 	if not caller_id then
@@ -629,10 +633,15 @@ export type Listener = {
 	Fire: (self: Listener, ...any) -> (),
 }
 
+export type batch = {
+	Destroy: (self: batch) -> (),
+}
+
 export type default = {
 	Fire: (self: default, caller_id: string, ...any) -> (),
 	Listen: (self: default, caller_id: string, once: boolean, call_back: (...any) -> ()) -> Listener,
 	CheckStatus: (self: default, caller_id: string) -> boolean,
+	GetListenerBatch: (self: default, caller_id: string) -> batch,
 	Destroy: (self: default) -> (),
 }
 
