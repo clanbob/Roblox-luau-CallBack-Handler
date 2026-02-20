@@ -416,6 +416,15 @@ function default:GetListenerBatch(caller_id : string): batch
 	return self.listener_list[caller_id]
 end
 
+function default:GeCurrentIds(): {string}
+	local ids = {}	
+	for id, batch in pairs(self.listener_list) do
+		table.insert(ids, id)
+	end
+
+	return ids
+end
+
 -- returns false if no active lisenters, else true	
 function default:CheckStatus(caller_id : string): boolean	
 	if not caller_id then
@@ -502,6 +511,16 @@ function registered:Destroy(dont_clear_cach: boolean)
 	end
 
 	setmetatable(self, nil)
+end
+
+-- returns a table of the currently active caller_ids
+function registered:GeCurrentIds(): {string}
+	local ids = {}	
+	for id, batch in pairs(self.listener_list) do
+		table.insert(ids, id)
+	end
+	
+	return ids
 end
 
 -- By-Instance Interface
@@ -618,7 +637,7 @@ function CallBack.New(): default
 	}, default)
 end
 
-function CallBack.NewByPlayer(): by_instance
+function CallBack.NewByPlayer(): by_player
 	if not game:GetService("RunService"):IsServer() then
 		warn("CallBack.NewByPlayer() should only used from the server")
 		return
@@ -652,11 +671,13 @@ export type default = {
 	Listen: (self: default, caller_id: string, once: boolean, call_back: (...any) -> ()) -> Listener,
 	CheckStatus: (self: default, caller_id: string) -> boolean,
 	GetListenerBatch: (self: default, caller_id: string) -> batch,
+	GeCurrentIds : (self : default) -> {string},
 	Destroy: (self: default) -> (),
 }
 
 export type reg = {
 	Destroy: (self: reg) -> (),
+	GeCurrentIds : (self : reg) -> {string},
 }
 
 export type by_player = {
