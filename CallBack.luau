@@ -430,14 +430,14 @@ function default:CheckStatus(caller_id : string): boolean
 	if not caller_id then
 		return if not next(self.batch_list) then false else true
 	end
-
+	
 	if not self.batch_list[caller_id] then
 		return false
 	end
-
+	
 	if not next(self.batch_list[caller_id].active)
 		and not next(self.batch_list[caller_id].pending) then
-
+		
 		return false
 	else
 		return true
@@ -581,7 +581,7 @@ function by_instance:CheckStatus(istance : Instance, caller_id : string): boolea
 	if not reg then
 		return false
 	end
-
+	
 	local batch = reg.batch_list[caller_id]
 	if not batch then
 		return false
