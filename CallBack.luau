@@ -205,7 +205,7 @@ function batch.New(self, caller_id)
 		is_firing = false,
 		destroyed = false,
 		dirty = false,
-		
+
 		pending = {},
 		active = {},
 		clean_up_buffer = {}
@@ -261,7 +261,7 @@ end
 -- After Fire(): remove disconnected/dirty listeners safely.
 function batch:CleanUpAfterFire()
 	if self.drity then self:Destroy() return end
-	
+
 	local clean_up = self.clean_up_buffer
 
 	for _, listener in pairs(self.active) do
@@ -430,14 +430,14 @@ function default:CheckStatus(caller_id : string): boolean
 	if not caller_id then
 		return if not next(self.batch_list) then false else true
 	end
-	
+
 	if not self.batch_list[caller_id] then
 		return false
 	end
-	
+
 	if not next(self.batch_list[caller_id].active)
 		and not next(self.batch_list[caller_id].pending) then
-		
+
 		return false
 	else
 		return true
@@ -519,8 +519,12 @@ function registered:GeCurrentIds(): {string}
 	for id, batch in pairs(self.batch_list) do
 		table.insert(ids, id)
 	end
-	
+
 	return ids
+end
+
+function registered:GetListenerBatch(caller_id : string): batch
+	return self.batch_list[caller_id]
 end
 
 -- By-Instance Interface
@@ -577,7 +581,7 @@ function by_instance:CheckStatus(istance : Instance, caller_id : string): boolea
 	if not reg then
 		return false
 	end
-	
+
 	local batch = reg.batch_list[caller_id]
 	if not batch then
 		return false
@@ -678,6 +682,7 @@ export type default = {
 export type reg = {
 	Destroy: (self: reg) -> (),
 	GeCurrentIds : (self : reg) -> {string},
+	GetListenerBatch: (self: reg, caller_id: string) -> batch,
 }
 
 export type by_player = {
