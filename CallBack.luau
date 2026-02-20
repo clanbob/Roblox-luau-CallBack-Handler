@@ -1,14 +1,21 @@
 --[[
-	
 	CALLBACK SYSTEM
 
 	Purpose:
-		Mutation-safe callback dispatcher.
+		Mutation-safe callback dispatcher with:
+			- Global groups (caller_id -> listeners)
+			- Per-player and per-instance registries
+			- "Once" listeners
+			- Safe Connect/Disconnect during Fire() (no mutation hazards)
+
+	Core Invariants:
+		- Listeners added during Fire() never execute in the same cycle (pending -> next cycle).
+		- Disconnect during Fire() marks dirty; actual structural removal happens after Fire().
+		- Dispatch is async via task.spawn (handlers never block Fire()).
 
 	Author:
 		TheRoyalDrew
 ]]
-
 
 -- Coroutine runner pattern inspired by @stravant thread-reuse approach.
 
@@ -395,6 +402,25 @@ function default:Destroy()
 	setmetatable(self, nil)
 end
 
+-- returns false if no active lisenters, else true	
+function default:CheckStatus(caller_id : string): boolean	
+	if not caller_id then
+		return if not next(self.listener_list) then false else true
+	end
+	
+	if not self.listener_list[caller_id] then
+		return false
+	end
+	
+	if not next(self.listener_list[caller_id].active)
+		and not next(self.listener_list[caller_id].pending) then
+		
+		return false
+	else
+		return true
+	end
+end
+
 -- Per-Player / Per-Instance Callback Group
 
 -- Registry object owning caller_id -> batch mappings for one player/instance key.
@@ -507,6 +533,33 @@ function by_instance:GetRegistered(instance: Instance)
 	return self.registered[instance]
 end
 
+-- returns false if no active lisenters, else true
+-- each param is optional
+function by_instance:CheckStatus(istance : Instance, caller_id : string): boolean	
+	if not caller_id or not istance then
+		return if not next(self.registered) then false else true
+	end
+
+	local reg = self:GetRegistered(istance)
+	if not reg then
+		return false
+	end
+	
+	local batch = reg.listener_list[caller_id]
+	if not batch then
+		return false
+	end
+
+	if not next(batch.active)
+		and not next(batch.pending) then
+
+		return false
+	else
+		return true
+	end
+end
+
+
 -- Sets a custom destroy signal for one instance registry.
 -- lock=true prevents replacing that signal later for this registry.
 function by_instance:UseCustomDestroyEventForInstance(instance: Instance, lock: boolean, event: RBXScriptSignal)
@@ -579,6 +632,7 @@ export type Listener = {
 export type default = {
 	Fire: (self: default, caller_id: string, ...any) -> (),
 	Listen: (self: default, caller_id: string, once: boolean, call_back: (...any) -> ()) -> Listener,
+	CheckStatus: (self: default, caller_id: string) -> boolean,
 	Destroy: (self: default) -> (),
 }
 
@@ -587,16 +641,18 @@ export type reg = {
 }
 
 export type by_player = {
-	Fire: (self: by_instance, player: Player, caller_id: string, ...any) -> (),
-	Listen: (self: by_instance, player: Player, caller_id: string, once: boolean, call_back: (...any) -> ()) -> Listener,
-	GetRegistered: (self: by_instance, player: Player) -> reg,
-	Destroy: (self: by_instance) -> (),
+	Fire: (self: by_player, player: Player, caller_id: string, ...any) -> (),
+	Listen: (self: by_player, player: Player, caller_id: string, once: boolean, call_back: (...any) -> ()) -> Listener,
+	GetRegistered: (self: by_player, player: Player) -> reg,
+	CheckStatus: (self: by_player, player: Player, caller_id: string) -> boolean,
+	Destroy: (self: by_player) -> (),
 }
 
 export type by_instance = {
 	Fire: (self: by_instance, instance: Instance, caller_id: string, ...any) -> (),
 	Listen: (self: by_instance, instance: Instance, caller_id: string, once: boolean, call_back: (...any) -> ()) -> Listener,
 	GetRegistered: (self: by_instance, instance: Instance) -> reg,
+	CheckStatus: (self: by_instance, instance: Instance, caller_id: string) -> boolean,
 	UseCustomDestroyEventForInstance: (self: by_instance, instance: Instance, lock: boolean, event: RBXScriptSignal) -> (),
 	Destroy: (self: by_instance) -> (),
 }
