@@ -203,6 +203,9 @@ function batch.New(self, caller_id)
 		parent = self,
 
 		is_firing = false,
+		destroyed = false,
+		dirty = false,
+		
 		pending = {},
 		active = {},
 		clean_up_buffer = {}
@@ -257,6 +260,8 @@ end
 
 -- After Fire(): remove disconnected/dirty listeners safely.
 function batch:CleanUpAfterFire()
+	if self.drity then self:Destroy() return end
+	
 	local clean_up = self.clean_up_buffer
 
 	for _, listener in pairs(self.active) do
@@ -277,6 +282,11 @@ end
 function batch:Destroy()
 	if self.destroyed then return end
 	self.destroyed = true
+
+	if self.is_firing then 
+		self.drity = true
+		return 
+	end
 
 	if self.parent then
 		self.parent[self.caller_id] = nil
