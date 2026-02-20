@@ -361,11 +361,11 @@ default.__index = default
 -- Registers a listener into caller_id's batch.
 -- If Fire() is in progress, the listener is created as pending for next cycle.
 function default:Listen(caller_id: string, once: boolean, call_back: (...any) -> ()): Listener
-	if not self.listener_list[caller_id] then
-		self.listener_list[caller_id] = batch.New(self.listener_list, caller_id)
+	if not self.batch_list[caller_id] then
+		self.batch_list[caller_id] = batch.New(self.batch_list, caller_id)
 	end
 
-	local batch = self.listener_list[caller_id]
+	local batch = self.batch_list[caller_id]
 	local id = generate_index()
 
 	local listener = Listener.New(batch, call_back, id, once, false)
@@ -385,7 +385,7 @@ end
 --   - promote pending
 --   - cleanup disconnected/dirty
 function default:Fire(caller_id: string, ...)
-	local batch = self.listener_list[caller_id]
+	local batch = self.batch_list[caller_id]
 	if not batch then return end
 
 	batch.is_firing = true
@@ -403,22 +403,22 @@ function default:Fire(caller_id: string, ...)
 end
 
 function default:Destroy()
-	for _, batches in pairs(self.listener_list) do
+	for _, batches in pairs(self.batch_list) do
 		batches:Destroy()
 	end
 
-	table.clear(self.listener_list)
+	table.clear(self.batch_list)
 	table.clear(self)
 	setmetatable(self, nil)
 end
 
 function default:GetListenerBatch(caller_id : string): batch
-	return self.listener_list[caller_id]
+	return self.batch_list[caller_id]
 end
 
 function default:GeCurrentIds(): {string}
 	local ids = {}	
-	for id, batch in pairs(self.listener_list) do
+	for id, batch in pairs(self.batch_list) do
 		table.insert(ids, id)
 	end
 
@@ -428,15 +428,15 @@ end
 -- returns false if no active lisenters, else true	
 function default:CheckStatus(caller_id : string): boolean	
 	if not caller_id then
-		return if not next(self.listener_list) then false else true
+		return if not next(self.batch_list) then false else true
 	end
 	
-	if not self.listener_list[caller_id] then
+	if not self.batch_list[caller_id] then
 		return false
 	end
 	
-	if not next(self.listener_list[caller_id].active)
-		and not next(self.listener_list[caller_id].pending) then
+	if not next(self.batch_list[caller_id].active)
+		and not next(self.batch_list[caller_id].pending) then
 		
 		return false
 	else
@@ -454,7 +454,7 @@ registered.__index = registered
 -- For instance registries, attaches the initial destroy signal (default: Destroying).
 function registered.New(self, instance: Instance, is_player: boolean, destroy_event: RBXScriptSignal)
 	local reg = setmetatable({
-		listener_list = {},
+		batch_list = {},
 		instance = instance,
 		parent = self,
 
@@ -473,11 +473,11 @@ function registered.New(self, instance: Instance, is_player: boolean, destroy_ev
 end
 
 function registered:Connect(caller_id: string, once: boolean, call_back: (...any) -> ())
-	if not self.listener_list[caller_id] then
-		self.listener_list[caller_id] = batch.New(self.listener_list, caller_id)
+	if not self.batch_list[caller_id] then
+		self.batch_list[caller_id] = batch.New(self.batch_list, caller_id)
 	end
 
-	local batch = self.listener_list[caller_id]
+	local batch = self.batch_list[caller_id]
 	local id = generate_index()
 
 	local listener = Listener.New(batch, call_back, id, once, false)
@@ -504,7 +504,7 @@ function registered:Destroy(dont_clear_cach: boolean)
 		remove_registry_from_cache(self.instance, self, self.is_player)
 	end
 
-	table.clear(self.listener_list)
+	table.clear(self.batch_list)
 
 	if self.parent then
 		self.parent.registered[self.instance] = nil
@@ -516,7 +516,7 @@ end
 -- returns a table of the currently active caller_ids
 function registered:GeCurrentIds(): {string}
 	local ids = {}	
-	for id, batch in pairs(self.listener_list) do
+	for id, batch in pairs(self.batch_list) do
 		table.insert(ids, id)
 	end
 	
@@ -540,7 +540,7 @@ function by_instance:Fire(instance: Instance, caller_id: string, ...)
 	local reg = self.registered[instance]
 	if not reg then return end
 
-	local batch = reg.listener_list[caller_id]
+	local batch = reg.batch_list[caller_id]
 	if not batch then return end
 
 	batch.is_firing = true
@@ -578,7 +578,7 @@ function by_instance:CheckStatus(istance : Instance, caller_id : string): boolea
 		return false
 	end
 	
-	local batch = reg.listener_list[caller_id]
+	local batch = reg.batch_list[caller_id]
 	if not batch then
 		return false
 	end
@@ -633,7 +633,7 @@ local CallBack = {}
 
 function CallBack.New(): default
 	return setmetatable({
-		listener_list = {}
+		batch_list = {}
 	}, default)
 end
 
