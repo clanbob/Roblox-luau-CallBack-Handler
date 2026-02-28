@@ -2,16 +2,10 @@
 	CALLBACK SYSTEM
 
 	Purpose:
-		Mutation-safe callback dispatcher with:
-			- Global groups (caller_id -> listeners)
+		callback dispatcher with:
+			- Global groups
 			- Per-player and per-instance registries
-			- "Once" listeners
-			- Safe Connect/Disconnect during Fire() (no mutation hazards)
-
-	Core Invariants:
-		- Listeners added during Fire() never execute in the same cycle (pending -> next cycle).
-		- Disconnect during Fire() marks dirty; actual structural removal happens after Fire().
-		- Dispatch is async via task.spawn (handlers never block Fire()).
+			- bulit in maid system, auto cleans it's self up.
 
 	Author:
 		TheRoyalDrew
@@ -22,9 +16,7 @@
 -- Shared coroutine reused to execute callbacks without creating a new coroutine per listener.
 local free_runner_thread: thread
 
--- Executes one callback via xpcall + traceback.
--- The free runner is temporarily detached to avoid accidental re-entrancy reuse
--- while this callback is in progress.
+
 local function run(call_back: (...any) -> (), ...)
 	local cached_runner_thread = free_runner_thread
 	free_runner_thread = nil
@@ -50,7 +42,6 @@ local function wait_for_work()
 end
 
 -- Dispatches a listener callback via the shared runner coroutine.
--- The runner is lazily created and primed on first dispatch.
 local function run_listener_in_runner_thread(listener: Listener, ...)
 	if not free_runner_thread then
 		free_runner_thread = coroutine.create(wait_for_work)
@@ -70,9 +61,6 @@ local function generate_index()
 	return cached_index
 end
 
--- Cleanup for registries:
---   - Players: cleaned via Players.PlayerRemoving
---   - Instances: cleaned via Destroying (or a custom destroy event)
 local player_removed_connection: RBXScriptConnection
 
 -- Instance -> { registry, ... } (non-player instances)
@@ -82,15 +70,10 @@ local cached_instance = {}
 local cached_player = {}
 
 -- Registered registry -> connection (destroy event hook)
--- NOTE:
---   This is keyed by registry object (not by instance) so different
---   dispatchers/registries that reference the same instance can still
---   own different destroy signals safely.
 local instance_removing_connection = {}
 
--- Removes one registry from its owning instance/player cache bucket.
--- If the bucket becomes empty, it removes the bucket key entirely.
--- For players, also tears down PlayerRemoving when no player registries remain.
+
+
 local function remove_registry_from_cache(instance: Instance, registry, is_player: boolean)
 	local cach = is_player and cached_player or cached_instance
 	local registries = cach[instance]
@@ -98,7 +81,7 @@ local function remove_registry_from_cache(instance: Instance, registry, is_playe
 
 	for i = #registries, 1, -1 do
 		if registries[i] == registry then
-			-- O(1) swap-remove; registry order is not semantically important.
+			-- O(1) swap-remove, registry order is not semantically important.
 			local last = #registries
 			registries[i] = registries[last]
 			registries[last] = nil
@@ -118,6 +101,7 @@ local function remove_registry_from_cache(instance: Instance, registry, is_playe
 	end
 end
 
+
 local function disconnect_instance_connection(registry)
 	local connection = instance_removing_connection[registry]
 	if not connection then return end
@@ -126,8 +110,8 @@ local function disconnect_instance_connection(registry)
 	instance_removing_connection[registry] = nil
 end
 
--- Clears an entire cache key (instance or player) and all associated cleanup hooks.
--- Used by global cleanup flows where every registry under the key is being removed.
+
+
 local function clear_cach(instance)
 	if cached_instance[instance] then
 		for _, registry in pairs(cached_instance[instance]) do
@@ -148,7 +132,8 @@ local function clear_cach(instance)
 	end
 end
 
--- Registers a registry under either the player cache or instance cache.
+
+
 local function add_to_cache(instance: Instance, registry, is_player: boolean)
 	local cach = is_player and cached_player or cached_instance
 
@@ -158,6 +143,7 @@ local function add_to_cache(instance: Instance, registry, is_player: boolean)
 
 	table.insert(cach[instance], registry)
 end
+
 
 -- Ensures PlayerRemoving hook is connected once globally for this module state.
 local function new_player_removing_connection()
@@ -174,9 +160,8 @@ local function new_player_removing_connection()
 	end)
 end
 
--- Hooks a one-time destroy event for a specific registry.
--- If this registry already has a hook, it is replaced.
--- Important: the hook destroys only that registry, not every registry under the instance.
+
+-- Note: the hook destroys only that registry, not every registry under the instance.
 local function new_removing_connection(event: RBXScriptSignal, reg)
 	disconnect_instance_connection(reg)
 
@@ -188,13 +173,9 @@ end
 
 -- Batch Container
 
--- Batch owns two listener sets:
---   active  -> eligible this cycle
---   pending -> added during Fire(); promoted after cycle
---
--- pending listeners never fire in the same cycle they were added.
 local batch = {}
 batch.__index = batch
+
 
 -- parent is the table mapping caller_id -> batch.
 function batch.New(self, caller_id)
@@ -258,7 +239,6 @@ function batch:CleanUp()
 	end
 end
 
--- After Fire(): remove disconnected/dirty listeners safely.
 function batch:CleanUpAfterFire()
 	if self.drity then self:Destroy() return end
 
@@ -278,7 +258,8 @@ function batch:CleanUpAfterFire()
 	self:CleanUp()
 end
 
--- Removes batch from parent and clears tables.
+
+-- cleans up the batch object
 function batch:Destroy()
 	if self.destroyed then return end
 	self.destroyed = true
@@ -302,13 +283,12 @@ end
 
 -- Listener Class
 
--- Listener handle returned by Listen().
--- Supports explicit disconnection and direct callback execution.
+
+
 local Listener = {}
 Listener.__index = Listener
 
--- pending=true means the listener was created during an active Fire() cycle
--- and must not run until the next cycle.
+-- pending means the listener was created during an active Fire() cycle
 function Listener.New(self, call_back: (...any) -> (), index: number, once: boolean, pending: boolean)
 	return setmetatable({
 		call_back = call_back,
@@ -322,9 +302,7 @@ function Listener.New(self, call_back: (...any) -> (), index: number, once: bool
 	}, Listener)
 end
 
--- Disconnect behavior:
---   - if not firing: remove immediately
---   - if firing: mark dirty and defer structural cleanup until post-fire
+
 function Listener:Disconnect()
 	if not self.connected then return end
 	self.connected = false
@@ -338,8 +316,8 @@ function Listener:Disconnect()
 	end
 end
 
--- Fires this one listener asynchronously.
--- `once` listeners disconnect before dispatch to guarantee at-most-once execution.
+
+-- Fires a listener asynchronously.
 function Listener:Fire(...)
 	if self.pending then
 		warn("Attempted to execute a pending listener during active firing.")
@@ -358,8 +336,8 @@ end
 local default = {}
 default.__index = default
 
+
 -- Registers a listener into caller_id's batch.
--- If Fire() is in progress, the listener is created as pending for next cycle.
 function default:Listen(caller_id: string, once: boolean, call_back: (...any) -> ()): Listener
 	if not self.batch_list[caller_id] then
 		self.batch_list[caller_id] = batch.New(self.batch_list, caller_id)
@@ -378,12 +356,7 @@ function default:Listen(caller_id: string, once: boolean, call_back: (...any) ->
 	return batch:ToActive(listener, id)
 end
 
--- Fire cycle:
---   - mark firing
---   - dispatch active
---   - unmark
---   - promote pending
---   - cleanup disconnected/dirty
+
 function default:Fire(caller_id: string, ...)
 	local batch = self.batch_list[caller_id]
 	if not batch then return end
@@ -430,14 +403,14 @@ function default:CheckStatus(caller_id : string): boolean
 	if not caller_id then
 		return if not next(self.batch_list) then false else true
 	end
-	
+
 	if not self.batch_list[caller_id] then
 		return false
 	end
-	
+
 	if not next(self.batch_list[caller_id].active)
 		and not next(self.batch_list[caller_id].pending) then
-		
+
 		return false
 	else
 		return true
@@ -491,7 +464,7 @@ function registered:Connect(caller_id: string, once: boolean, call_back: (...any
 end
 
 -- Destroys this registry.
--- dont_clear_cach=true is used by cleanup handlers that already removed the cache key.
+-- dont_clear_cach is used by cleanup handlers that already removed the cache key, should not be passed in manually.
 function registered:Destroy(dont_clear_cach: boolean)
 	if self.destroyed then return end
 	self.destroyed = true
@@ -581,7 +554,7 @@ function by_instance:CheckStatus(istance : Instance, caller_id : string): boolea
 	if not reg then
 		return false
 	end
-	
+
 	local batch = reg.batch_list[caller_id]
 	if not batch then
 		return false
@@ -598,7 +571,7 @@ end
 
 
 -- Sets a custom destroy signal for one instance registry.
--- lock=true prevents replacing that signal later for this registry.
+-- lock prevents replacing that signal later for this registry.
 function by_instance:UseCustomDestroyEventForInstance(instance: Instance, lock: boolean, event: RBXScriptSignal)
 	if self.is_player then
 		error("players can not have custom destroyed events")
@@ -659,11 +632,11 @@ function CallBack.NewByInstance(): by_instance
 	}, by_instance)
 end
 
+
 -- Types
 
 export type Listener = {
 	Disconnect: (self: Listener) -> (),
-	Fire: (self: Listener, ...any) -> (),
 }
 
 export type batch = {
