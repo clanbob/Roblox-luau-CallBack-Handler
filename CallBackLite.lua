@@ -1,42 +1,16 @@
 --[[
-	CALLBACK LITE (Lua-compatible)
+	CALLBACK SYSTEM
 
 	Purpose:
-		Mutation-safe callback dispatcher with:
-			- Global groups (caller_id -> listeners)
-			- "Once" listeners
-			- Safe Connect/Disconnect during Fire() (no mutation hazards)
+		callback dispatcher with global groups
 
-	This lite build intentionally excludes:
-		- per-instance registries
-		- per-player registries
-		- Luau type annotations
+	Author:
+		TheRoyalDrew
+
+	Ported to standard Lua 5.1/5.2+
 ]]
 
-local table_clear = table.clear or function(t)
-	for k in pairs(t) do
-		t[k] = nil
-	end
-end
-
-local function warn_message(msg)
-	if warn then
-		warn(msg)
-	else
-		print(msg)
-	end
-end
-
-local function spawn_thread(thread, ...)
-	if task and task.spawn then
-		task.spawn(thread, ...)
-	else
-		local args = { ... }
-		coroutine.wrap(function()
-			coroutine.resume(thread, table.unpack(args))
-		end)()
-	end
-end
+-- Coroutine runner pattern inspired by @stravant thread-reuse approach.
 
 local free_runner_thread
 
@@ -44,18 +18,7 @@ local function run(call_back, ...)
 	local cached_runner_thread = free_runner_thread
 	free_runner_thread = nil
 
-	local function errorHandler(err)
-		if debug and debug.traceback then
-			return debug.traceback(tostring(err), 2)
-		end
-		return tostring(err)
-	end
-
-	local success, error_message = xpcall(call_back, errorHandler, ...)
-	if not success then
-		warn_message(error_message)
-	end
-
+	call_back(...)
 	free_runner_thread = cached_runner_thread
 end
 
@@ -71,15 +34,10 @@ local function run_listener_in_runner_thread(listener, ...)
 		coroutine.resume(free_runner_thread)
 	end
 
-	spawn_thread(free_runner_thread, listener.call_back, ...)
+	coroutine.resume(free_runner_thread, listener.call_back, ...)
 end
 
-local index = 1
-local function generate_index()
-	local cached_index = index
-	index = index + 1
-	return cached_index
-end
+-- Batch Container
 
 local batch = {}
 batch.__index = batch
@@ -88,32 +46,46 @@ function batch.New(self, caller_id)
 	return setmetatable({
 		caller_id = caller_id,
 		parent = self,
+
+		next_index = 0,
+
 		is_firing = false,
 		destroyed = false,
 		dirty = false,
+
+		dirty_listeners = {},
+
 		pending = {},
 		active = {},
-		clean_up_buffer = {},
 	}, batch)
 end
 
-function batch:ToPending(listener, id)
+function batch:NextIndex()
+	self.next_index = self.next_index + 1
+	return self.next_index
+end
+
+function batch:ToPending(listener, index)
 	listener.pending = true
-	self.pending[id] = listener
+	self.pending[index] = listener
 	return listener
 end
 
-function batch:ToActive(listener, id)
-	self.active[id] = listener
+function batch:ToActive(listener, index)
+	self.active[index] = listener
 	return listener
 end
 
-function batch:RemoveListener(id)
-	self.pending[id] = nil
-	self.active[id] = nil
+function batch:RemoveListener(index)
+	self.pending[index] = nil
+	self.active[index] = nil
+
+	self:CleanUp()
 end
 
 function batch:FlushPending()
+	if not next(self.pending) then return end
+
 	for _, listener in pairs(self.pending) do
 		if listener.connected then
 			listener.pending = false
@@ -121,44 +93,33 @@ function batch:FlushPending()
 		end
 	end
 
-	table_clear(self.pending)
+	for k in pairs(self.pending) do
+		self.pending[k] = nil
+	end
 end
 
 function batch:CleanUp()
-	local empty_active = not next(self.active)
-	local empty_pending = not next(self.pending)
-
-	if empty_active and empty_pending then
+	if not next(self.active) and not next(self.pending) then
 		self:Destroy()
-		return
-	end
-
-	if empty_active then
-		table_clear(self.active)
-	end
-	if empty_pending then
-		table_clear(self.pending)
 	end
 end
 
 function batch:CleanUpAfterFire()
-	if self.dirty then
-		self:Destroy()
-		return
-	end
+	if self.dirty then self:Destroy() return end
 
-	local clean_up = self.clean_up_buffer
-	for _, listener in pairs(self.active) do
-		if (not listener.connected) or listener.dirty then
-			table.insert(clean_up, listener)
+	if next(self.dirty_listeners) then
+		for _, index in ipairs(self.dirty_listeners) do
+			local listener = self.active[index]
+			if listener then
+				listener:Disconnect()
+			end
+		end
+
+		for k in pairs(self.dirty_listeners) do
+			self.dirty_listeners[k] = nil
 		end
 	end
 
-	for _, listener in ipairs(clean_up) do
-		listener:Disconnect()
-	end
-
-	table_clear(clean_up)
 	self:CleanUp()
 end
 
@@ -175,26 +136,27 @@ function batch:Destroy()
 		self.parent[self.caller_id] = nil
 	end
 
-	table_clear(self.pending)
-	table_clear(self.active)
-	table_clear(self.clean_up_buffer)
+	for k in pairs(self.pending) do self.pending[k] = nil end
+	for k in pairs(self.active) do self.active[k] = nil end
 
 	self.parent = nil
 	self.caller_id = nil
 end
 
+-- Listener Class
+
 local Listener = {}
 Listener.__index = Listener
 
-function Listener.New(self, call_back, id, once, pending)
+function Listener.New(self, call_back, index, once, pending)
 	return setmetatable({
 		call_back = call_back,
 		once = once,
-		index = id,
+		index = index,
+
 		connected = true,
-		dirty = false,
 		pending = pending,
-		batch = self,
+		batch = self
 	}, Listener)
 end
 
@@ -204,16 +166,14 @@ function Listener:Disconnect()
 
 	if not self.batch.is_firing then
 		self.batch:RemoveListener(self.index)
-		self.dirty = false
-		self.batch:CleanUp()
 	else
-		self.dirty = true
+		table.insert(self.batch.dirty_listeners, self.index)
 	end
 end
 
 function Listener:Fire(...)
 	if self.pending then
-		warn_message("Attempted to execute a pending listener during active firing.")
+		print("Warning: Attempted to execute a pending listener during active firing.")
 		return
 	end
 
@@ -224,6 +184,8 @@ function Listener:Fire(...)
 	run_listener_in_runner_thread(self, ...)
 end
 
+-- Default Callback Group
+
 local default = {}
 default.__index = default
 
@@ -232,41 +194,46 @@ function default:Listen(caller_id, once, call_back)
 		self.batch_list[caller_id] = batch.New(self.batch_list, caller_id)
 	end
 
-	local batch_obj = self.batch_list[caller_id]
-	local id = generate_index()
-	local listener = Listener.New(batch_obj, call_back, id, once, false)
+	local b = self.batch_list[caller_id]
+	local id = b:NextIndex()
 
-	if batch_obj.is_firing then
+	local listener = Listener.New(b, call_back, id, once, false)
+
+	if b.is_firing then
 		listener.pending = true
-		return batch_obj:ToPending(listener, id)
+		return b:ToPending(listener, id)
 	end
 
-	return batch_obj:ToActive(listener, id)
+	return b:ToActive(listener, id)
 end
 
 function default:Fire(caller_id, ...)
-	local batch_obj = self.batch_list[caller_id]
-	if not batch_obj then return end
+	local b = self.batch_list[caller_id]
+	if not b then return end
 
-	batch_obj.is_firing = true
-	for _, listener in pairs(batch_obj.active) do
+	b.is_firing = true
+
+	local k, listener = next(b.active)
+	while k do
 		if listener.connected and not listener.pending then
 			listener:Fire(...)
 		end
+		k, listener = next(b.active, k)
 	end
-	batch_obj.is_firing = false
 
-	batch_obj:FlushPending()
-	batch_obj:CleanUpAfterFire()
+	b.is_firing = false
+
+	b:FlushPending()
+	b:CleanUpAfterFire()
 end
 
 function default:Destroy()
-	for _, batches in pairs(self.batch_list) do
-		batches:Destroy()
+	for _, b in pairs(self.batch_list) do
+		b:Destroy()
 	end
 
-	table_clear(self.batch_list)
-	table_clear(self)
+	for k in pairs(self.batch_list) do self.batch_list[k] = nil end
+	for k in pairs(self) do self[k] = nil end
 	setmetatable(self, nil)
 end
 
@@ -274,7 +241,7 @@ function default:GetListenerBatch(caller_id)
 	return self.batch_list[caller_id]
 end
 
-function default:GeCurrentIds()
+function default:GetCurrentIds()
 	local ids = {}
 	for id in pairs(self.batch_list) do
 		table.insert(ids, id)
@@ -283,23 +250,26 @@ function default:GeCurrentIds()
 end
 
 function default:CheckStatus(caller_id)
-	if caller_id == nil then
-		return not not next(self.batch_list)
+	if not caller_id then
+		return next(self.batch_list) ~= nil
 	end
 
 	if not self.batch_list[caller_id] then
 		return false
 	end
 
-	return not (not next(self.batch_list[caller_id].active) and not next(self.batch_list[caller_id].pending))
+	return next(self.batch_list[caller_id].active) ~= nil
+		or next(self.batch_list[caller_id].pending) ~= nil
 end
 
-local CallBackLite = {}
+-- Public
 
-function CallBackLite.New()
+local CallBack = {}
+
+function CallBack.New()
 	return setmetatable({
-		batch_list = {},
+		batch_list = {}
 	}, default)
 end
 
-return CallBackLite
+return CallBack
