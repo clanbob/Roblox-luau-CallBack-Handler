@@ -651,6 +651,7 @@ export type by_player = {
 	Listen: (self: by_player, player: Player, caller_id: string, once: boolean, call_back: (...any) -> ()) -> Listener,
 	GetRegistered: (self: by_player, player: Player) -> reg,
 	CheckStatus: (self: by_player, player: Player, caller_id: string) -> boolean,
+	Wait : (self : by_player, instance : Instance, caller_id : string) -> (...any),
 	Destroy: (self: by_player) -> (),
 }
 
