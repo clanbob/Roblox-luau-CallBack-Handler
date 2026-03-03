@@ -13,6 +13,7 @@
 -- Coroutine runner pattern inspired by @stravant thread-reuse approach.
 
 -- Shared coroutine reused to execute callbacks without creating a new coroutine per listener.
+
 local free_runner_thread: thread
 
 local function run(call_back: (...any) -> (), ...)
@@ -298,11 +299,6 @@ end
 
 -- Fires a listener asynchronously.
 function Listener:Fire(...)
-	if self.pending then
-		warn("Attempted to execute a pending listener during active firing.")
-		return
-	end
-
 	if self.once then
 		self:Disconnect()
 	end
@@ -347,6 +343,7 @@ function default:Fire(caller_id: string, ...)
 		if listener.connected and not listener.pending then
 			listener:Fire(...)
 		end
+		
 		k, listener = next(batch.active, k)
 	end
 
@@ -377,6 +374,16 @@ function default:GetCurrentIds(): {string}
 	end
 
 	return ids
+end
+
+function default:Wait(caller_id : string)
+	if not caller_id then return end
+	local running_thread = coroutine.running()
+
+	self:Listen(caller_id, true, function(...)
+		task.spawn(running_thread, ...)
+	end)
+	return coroutine.yield()
 end
 
 -- returns false if no active lisenters, else true	
@@ -559,6 +566,16 @@ function by_instance:UseCustomDestroyEventForInstance(instance: Instance, lock: 
 	end
 end
 
+function by_instance:Wait(instance : Instance, caller_id : string)
+	if not instance or not caller_id then return end
+	local running_thread = coroutine.running()
+	
+	self:Listen(instance, caller_id, true, function(...)
+		task.spawn(running_thread, ...)
+	end)
+	return coroutine.yield()
+end
+
 function by_instance:Destroy()
 	-- Copy first to avoid mutating self.registered while iterating it.
 	local to_destroy = {}
@@ -620,6 +637,7 @@ export type default = {
 	CheckStatus: (self: default, caller_id: string) -> boolean,
 	GetListenerBatch: (self: default, caller_id: string) -> batch,
 	GetCurrentIds : (self : default) -> {string},
+	Wait : (self : default, caller_id : string) -> (...any),
 	Destroy: (self: default) -> (),
 }
 
@@ -643,6 +661,7 @@ export type by_instance = {
 	GetRegistered: (self: by_instance, instance: Instance) -> reg,
 	CheckStatus: (self: by_instance, instance: Instance, caller_id: string) -> boolean,
 	UseCustomDestroyEventForInstance: (self: by_instance, instance: Instance, lock: boolean, event: RBXScriptSignal) -> (),
+	Wait : (self : by_instance, instance : Instance, caller_id : string) -> (...any),
 	Destroy: (self: by_instance) -> (),
 }
 
