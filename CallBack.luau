@@ -4,8 +4,7 @@
 	Purpose:
 		callback dispatcher with:
 			- Global groups
-			- Per-player and per-instance registries
-			- bulit in maid system, auto cleans it's self up.
+			- Per-player and per-instance registriesfile:///C:/Users/andre/Downloads/CallBack (2).luau
 
 	Author:
 		TheRoyalDrew
@@ -16,21 +15,11 @@
 -- Shared coroutine reused to execute callbacks without creating a new coroutine per listener.
 local free_runner_thread: thread
 
-
 local function run(call_back: (...any) -> (), ...)
 	local cached_runner_thread = free_runner_thread
 	free_runner_thread = nil
 
-	local function errorHandler(err)
-		return debug.traceback(tostring(err), 2)
-	end
-
-	local success, error_message = xpcall(call_back, errorHandler, ...)
-
-	if not success then
-		warn(error_message)
-	end
-
+	call_back(...)
 	free_runner_thread = cached_runner_thread
 end
 
@@ -53,13 +42,6 @@ end
 
 
 
--- Monotonic id used as a stable hash-key for listener storage tables.
-local index = 1
-local function generate_index()
-	local cached_index = index
-	index += 1
-	return cached_index
-end
 
 local player_removed_connection: RBXScriptConnection
 
@@ -74,9 +56,9 @@ local instance_removing_connection = {}
 
 
 
-local function remove_registry_from_cache(instance: Instance, registry, is_player: boolean)
-	local cach = is_player and cached_player or cached_instance
-	local registries = cach[instance]
+local function remove_registry_from_cache(instance: Instance, registry : reg, is_player: boolean)
+	local cache = is_player and cached_player or cached_instance
+	local registries = cache[instance]
 	if not registries then return end
 
 	for i = #registries, 1, -1 do
@@ -90,10 +72,10 @@ local function remove_registry_from_cache(instance: Instance, registry, is_playe
 	end
 
 	if not next(registries) then
-		cach[instance] = nil
+		cache[instance] = nil
 
 		if is_player then
-			if not next(cach) and player_removed_connection then
+			if not next(cache) and player_removed_connection then
 				player_removed_connection:Disconnect()
 				player_removed_connection = nil
 			end
@@ -135,13 +117,13 @@ end
 
 
 local function add_to_cache(instance: Instance, registry, is_player: boolean)
-	local cach = is_player and cached_player or cached_instance
+	local cache = is_player and cached_player or cached_instance
 
-	if not cach[instance] then
-		cach[instance] = {}
+	if not cache[instance] then
+		cache[instance] = {}
 	end
 
-	table.insert(cach[instance], registry)
+	table.insert(cache[instance], registry)
 end
 
 
@@ -176,21 +158,28 @@ end
 local batch = {}
 batch.__index = batch
 
-
 -- parent is the table mapping caller_id -> batch.
 function batch.New(self, caller_id)
 	return setmetatable({
 		caller_id = caller_id,
 		parent = self,
-
+			
+		next_index = 0,	-- Monotonic id used as a stable hash-key for listeners.
+			
 		is_firing = false,
 		destroyed = false,
 		dirty = false,
+		
+		dirty_listeners = {}, -- {index : number}		
 
 		pending = {},
 		active = {},
-		clean_up_buffer = {}
 	}, batch)
+end
+
+function batch:NextIndex()
+	self.next_index += 1
+	return self.next_index
 end
 
 function batch:ToPending(listener: Listener, index: number): Listener
@@ -207,10 +196,14 @@ end
 function batch:RemoveListener(index: number)
 	self.pending[index] = nil
 	self.active[index] = nil
+	
+	self:CleanUp()
 end
 
 -- Promote pending -> active after Fire().
 function batch:FlushPending()
+	if not next(self.pending) then return end
+	
 	for _, listener in pairs(self.pending) do
 		if listener.connected then
 			listener.pending = false
@@ -223,38 +216,26 @@ end
 
 -- Destroys the batch if it has no listeners.
 function batch:CleanUp()
-	local empty_active = not next(self.active)
-	local empty_pending = not next(self.pending)
-
-	if empty_active and empty_pending then
+	if not next(self.active) and not next(self.pending) then
 		self:Destroy()
-		return
-	end
-
-	if empty_active then
-		table.clear(self.active)
-	end
-	if empty_pending then
-		table.clear(self.pending)
 	end
 end
 
+
 function batch:CleanUpAfterFire()
-	if self.drity then self:Destroy() return end
+	if self.dirty then self:Destroy() return end
 
-	local clean_up = self.clean_up_buffer
-
-	for _, listener in pairs(self.active) do
-		if (not listener.connected) or listener.dirty then
-			table.insert(clean_up, listener)
+	if next(self.dirty_listeners) then		
+		for _, index in ipairs(self.dirty_listeners) do
+			local listener = self.active[index]
+			if listener then
+				listener:Disconnect()
+			end
 		end
+		
+		table.clear(self.dirty_listeners)
 	end
-
-	for _, listener in ipairs(clean_up) do
-		listener:Disconnect()
-	end
-
-	table.clear(clean_up)
+	
 	self:CleanUp()
 end
 
@@ -265,7 +246,7 @@ function batch:Destroy()
 	self.destroyed = true
 
 	if self.is_firing then 
-		self.drity = true
+		self.dirty = true
 		return 
 	end
 
@@ -275,7 +256,6 @@ function batch:Destroy()
 
 	table.clear(self.pending)
 	table.clear(self.active)
-	table.clear(self.clean_up_buffer)
 
 	self.parent = nil
 	self.caller_id = nil
@@ -296,7 +276,6 @@ function Listener.New(self, call_back: (...any) -> (), index: number, once: bool
 		index = index,
 
 		connected = true,
-		dirty = false, -- set when disconnecting during Fire()
 		pending = pending,
 		batch = self
 	}, Listener)
@@ -309,10 +288,8 @@ function Listener:Disconnect()
 
 	if not self.batch.is_firing then
 		self.batch:RemoveListener(self.index)
-		self.dirty = false
-		self.batch:CleanUp()
-	else
-		self.dirty = true
+	else	
+		table.insert(self.batch.dirty_listeners, self.index)
 	end
 end
 
@@ -344,7 +321,7 @@ function default:Listen(caller_id: string, once: boolean, call_back: (...any) ->
 	end
 
 	local batch = self.batch_list[caller_id]
-	local id = generate_index()
+	local id = batch:NextIndex()
 
 	local listener = Listener.New(batch, call_back, id, once, false)
 
@@ -362,11 +339,13 @@ function default:Fire(caller_id: string, ...)
 	if not batch then return end
 
 	batch.is_firing = true
-
-	for _, listener in pairs(batch.active) do
+	
+	local k, listener = next(batch.active)
+	while k do
 		if listener.connected and not listener.pending then
 			listener:Fire(...)
 		end
+		k, listener = next(batch.active, k)
 	end
 
 	batch.is_firing = false
@@ -389,7 +368,7 @@ function default:GetListenerBatch(caller_id : string): batch
 	return self.batch_list[caller_id]
 end
 
-function default:GeCurrentIds(): {string}
+function default:GetCurrentIds(): {string}
 	local ids = {}	
 	for id, batch in pairs(self.batch_list) do
 		table.insert(ids, id)
@@ -408,13 +387,8 @@ function default:CheckStatus(caller_id : string): boolean
 		return false
 	end
 
-	if not next(self.batch_list[caller_id].active)
-		and not next(self.batch_list[caller_id].pending) then
-
-		return false
-	else
-		return true
-	end
+	return next(self.batch_list[caller_id].active) ~= nil 
+		or next(self.batch_list[caller_id].pending) ~= nil
 end
 
 -- Per-Player / Per-Instance Callback Group
@@ -451,7 +425,7 @@ function registered:Connect(caller_id: string, once: boolean, call_back: (...any
 	end
 
 	local batch = self.batch_list[caller_id]
-	local id = generate_index()
+	local id = batch:NextIndex()
 
 	local listener = Listener.New(batch, call_back, id, once, false)
 
@@ -487,7 +461,7 @@ function registered:Destroy(dont_clear_cach: boolean)
 end
 
 -- returns a table of the currently active caller_ids
-function registered:GeCurrentIds(): {string}
+function registered:GetCurrentIds(): {string}
 	local ids = {}	
 	for id, batch in pairs(self.batch_list) do
 		table.insert(ids, id)
@@ -522,10 +496,13 @@ function by_instance:Fire(instance: Instance, caller_id: string, ...)
 
 	batch.is_firing = true
 
-	for _, listener in pairs(batch.active) do
+	local k, listener = next(batch.active)
+	while k do
 		if listener.connected and not listener.pending then
 			listener:Fire(...)
 		end
+		
+		k, listener = next(batch.active, k)
 	end
 
 	batch.is_firing = false
@@ -545,12 +522,12 @@ end
 
 -- returns false if no active lisenters, else true
 -- each param is optional
-function by_instance:CheckStatus(istance : Instance, caller_id : string): boolean	
-	if not caller_id or not istance then
+function by_instance:CheckStatus(instance : Instance, caller_id : string): boolean	
+	if not caller_id or not instance then
 		return if not next(self.registered) then false else true
 	end
 
-	local reg = self:GetRegistered(istance)
+	local reg = self:GetRegistered(instance)
 	if not reg then
 		return false
 	end
@@ -560,13 +537,7 @@ function by_instance:CheckStatus(istance : Instance, caller_id : string): boolea
 		return false
 	end
 
-	if not next(batch.active)
-		and not next(batch.pending) then
-
-		return false
-	else
-		return true
-	end
+	return next(batch.active) ~= nil or next(batch.pending) ~= nil
 end
 
 
@@ -597,12 +568,10 @@ function by_instance:Destroy()
 		reg:Destroy()
 	end
 
-	table.clear(to_destroy)
 	table.clear(self.registered)
 	table.clear(self)
 	setmetatable(self, nil)
 end
-
 
 -- Public
 
@@ -648,13 +617,13 @@ export type default = {
 	Listen: (self: default, caller_id: string, once: boolean, call_back: (...any) -> ()) -> Listener,
 	CheckStatus: (self: default, caller_id: string) -> boolean,
 	GetListenerBatch: (self: default, caller_id: string) -> batch,
-	GeCurrentIds : (self : default) -> {string},
+	GetCurrentIds : (self : default) -> {string},
 	Destroy: (self: default) -> (),
 }
 
 export type reg = {
 	Destroy: (self: reg) -> (),
-	GeCurrentIds : (self : reg) -> {string},
+	GetCurrentIds : (self : reg) -> {string},
 	GetListenerBatch: (self: reg, caller_id: string) -> batch,
 }
 
