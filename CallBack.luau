@@ -4,7 +4,7 @@
 	Purpose:
 		callback dispatcher with:
 			- Global groups
-			- Per-player and per-instance registriesfile:///C:/Users/andre/Downloads/CallBack (2).luau
+			- Per-player and per-instance
 
 	Author:
 		TheRoyalDrew
@@ -221,7 +221,6 @@ function batch:CleanUp()
 	end
 end
 
-
 function batch:CleanUpAfterFire()
 	if self.dirty then self:Destroy() return end
 
@@ -229,7 +228,11 @@ function batch:CleanUpAfterFire()
 		for _, index in ipairs(self.dirty_listeners) do
 			local listener = self.active[index]
 			if listener then
-				listener:Disconnect()
+				if listener.connected then
+					listener:Disconnect()
+				else
+					self:RemoveListener(index)
+				end				
 			end
 		end
 		
@@ -242,13 +245,12 @@ end
 
 -- cleans up the batch object
 function batch:Destroy()
-	if self.destroyed then return end
-	self.destroyed = true
-
 	if self.is_firing then 
 		self.dirty = true
-		return 
 	end
+	
+	if self.destroyed then return end
+	self.destroyed = true
 
 	if self.parent then
 		self.parent[self.caller_id] = nil
@@ -304,7 +306,7 @@ function Listener:Fire(...)
 	if self.once then
 		self:Disconnect()
 	end
-
+	
 	run_listener_in_runner_thread(self, ...)
 end
 
