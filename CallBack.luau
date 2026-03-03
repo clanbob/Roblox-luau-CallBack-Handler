@@ -197,8 +197,6 @@ end
 function batch:RemoveListener(index: number)
 	self.pending[index] = nil
 	self.active[index] = nil
-	
-	self:CleanUp()
 end
 
 -- Promote pending -> active after Fire().
@@ -291,6 +289,7 @@ function Listener:Disconnect()
 
 	if not self.batch.is_firing then
 		self.batch:RemoveListener(self.index)
+		self.batch:CleanUp()
 	else	
 		table.insert(self.batch.dirty_listeners, self.index)
 	end
