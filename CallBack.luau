@@ -148,6 +148,7 @@ end
 local function new_removing_connection(event: RBXScriptSignal, reg)
 	disconnect_instance_connection(reg)
 
+	if not event then return end
 	instance_removing_connection[reg] = event:Once(function()
 		if reg.destroyed then return end
 		reg:Destroy()
@@ -197,6 +198,8 @@ end
 function batch:RemoveListener(index: number)
 	self.pending[index] = nil
 	self.active[index] = nil
+	
+	self:CleanUp()
 end
 
 -- Promote pending -> active after Fire().
@@ -244,11 +247,13 @@ end
 
 -- cleans up the batch object
 function batch:Destroy()
-	if self.is_firing then 
-		self.dirty = true
-	end
-	
 	if self.destroyed then return end
+
+	if self.is_firing then
+		self.dirty = true
+		return
+	end
+
 	self.destroyed = true
 
 	if self.parent then
@@ -289,7 +294,6 @@ function Listener:Disconnect()
 
 	if not self.batch.is_firing then
 		self.batch:RemoveListener(self.index)
-		self.batch:CleanUp()
 	else	
 		table.insert(self.batch.dirty_listeners, self.index)
 	end
@@ -551,6 +555,8 @@ end
 
 -- Sets a custom destroy signal for one instance registry.
 -- lock prevents replacing that signal later for this registry.
+-- passing nil for event will remove the current destroy event, leaving no clean-up events. can save memory
+-- if you know the instance will not be destroyed
 function by_instance:UseCustomDestroyEventForInstance(instance: Instance, lock: boolean, event: RBXScriptSignal)
 	if self.is_player then
 		error("players can not have custom destroyed events")
@@ -558,11 +564,10 @@ function by_instance:UseCustomDestroyEventForInstance(instance: Instance, lock: 
 
 	if not self.registered[instance] then
 		self.registered[instance] = registered.New(self, instance, false, event)
-		self.registered[instance].lock_event = lock
 	elseif not self.registered[instance].lock_event then
 		new_removing_connection(event, self.registered[instance])
-		self.registered[instance].lock_event = lock
 	end
+	self.registered[instance].lock_event = lock
 end
 
 function by_instance:Wait(instance : Instance, caller_id : string)
@@ -651,7 +656,6 @@ export type by_player = {
 	Listen: (self: by_player, player: Player, caller_id: string, once: boolean, call_back: (...any) -> ()) -> Listener,
 	GetRegistered: (self: by_player, player: Player) -> reg,
 	CheckStatus: (self: by_player, player: Player, caller_id: string) -> boolean,
-	Wait : (self : by_player, instance : Instance, caller_id : string) -> (...any),
 	Destroy: (self: by_player) -> (),
 }
 
