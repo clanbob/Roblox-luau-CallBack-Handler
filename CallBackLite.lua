@@ -13,6 +13,7 @@
 -- Coroutine runner pattern inspired by @stravant thread-reuse approach.
 
 local free_runner_thread
+local table_insert = table.insert
 
 local function run(call_back, ...)
 	local cached_runner_thread = free_runner_thread
@@ -109,10 +110,8 @@ function batch:CleanUpAfterFire()
 
 	if next(self.dirty_listeners) then
 		for _, index in ipairs(self.dirty_listeners) do
-			local listener = self.active[index]
-			if listener then
-				listener:Disconnect()
-			end
+			self.pending[index] = nil
+			self.active[index] = nil
 		end
 
 		for k in pairs(self.dirty_listeners) do
@@ -167,7 +166,7 @@ function Listener:Disconnect()
 	if not self.batch.is_firing then
 		self.batch:RemoveListener(self.index)
 	else
-		table.insert(self.batch.dirty_listeners, self.index)
+		table_insert(self.batch.dirty_listeners, self.index)
 	end
 end
 
@@ -188,6 +187,25 @@ end
 
 local default = {}
 default.__index = default
+
+local function fire_batch(b, ...)
+	b.is_firing = true
+
+	local k, listener = next(b.active)
+	while k do
+		if listener.connected and not listener.pending then
+			listener:Fire(...)
+		end
+		k, listener = next(b.active, k)
+	end
+
+	b.is_firing = false
+
+	if b.parent then
+		b:FlushPending()
+		b:CleanUpAfterFire()
+	end
+end
 
 function default:Listen(caller_id, once, call_back)
 	if not self.batch_list[caller_id] then
@@ -211,20 +229,7 @@ function default:Fire(caller_id, ...)
 	local b = self.batch_list[caller_id]
 	if not b then return end
 
-	b.is_firing = true
-
-	local k, listener = next(b.active)
-	while k do
-		if listener.connected and not listener.pending then
-			listener:Fire(...)
-		end
-		k, listener = next(b.active, k)
-	end
-
-	b.is_firing = false
-
-	b:FlushPending()
-	b:CleanUpAfterFire()
+	fire_batch(b, ...)
 end
 
 function default:Destroy()
@@ -244,7 +249,7 @@ end
 function default:GetCurrentIds()
 	local ids = {}
 	for id in pairs(self.batch_list) do
-		table.insert(ids, id)
+		table_insert(ids, id)
 	end
 	return ids
 end

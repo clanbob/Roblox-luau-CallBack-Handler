@@ -15,6 +15,7 @@
 -- Shared coroutine reused to execute callbacks without creating a new coroutine per listener.
 
 local free_runner_thread: thread
+local table_insert = table.insert
 
 local function run(call_back: (...any) -> (), ...)
 	local cached_runner_thread = free_runner_thread
@@ -95,7 +96,7 @@ end
 
 
 
-local function clear_cach(instance)
+local function clear_cache(instance)
 	if cached_instance[instance] then
 		for _, registry in pairs(cached_instance[instance]) do
 			disconnect_instance_connection(registry)
@@ -124,7 +125,8 @@ local function add_to_cache(instance: Instance, registry, is_player: boolean)
 		cache[instance] = {}
 	end
 
-	table.insert(cache[instance], registry)
+	local registries = cache[instance]
+	registries[#registries + 1] = registry
 end
 
 
@@ -139,7 +141,7 @@ local function new_player_removing_connection()
 			registered_player_objects:Destroy(true)
 		end
 
-		clear_cach(player)
+		clear_cache(player)
 	end)
 end
 
@@ -228,14 +230,8 @@ function batch:CleanUpAfterFire()
 
 	if next(self.dirty_listeners) then		
 		for _, index in ipairs(self.dirty_listeners) do
-			local listener = self.active[index]
-			if listener then
-				if listener.connected then
-					listener:Disconnect()
-				else
-					self:RemoveListener(index)
-				end				
-			end
+			self.pending[index] = nil
+			self.active[index] = nil
 		end
 		
 		table.clear(self.dirty_listeners)
@@ -295,7 +291,7 @@ function Listener:Disconnect()
 	if not self.batch.is_firing then
 		self.batch:RemoveListener(self.index)
 	else	
-		table.insert(self.batch.dirty_listeners, self.index)
+		table_insert(self.batch.dirty_listeners, self.index)
 	end
 end
 
@@ -335,25 +331,31 @@ function default:Listen(caller_id: string, once: boolean, call_back: (...any) ->
 end
 
 
-function default:Fire(caller_id: string, ...)
-	local batch = self.batch_list[caller_id]
-	if not batch then return end
+local function fire_batch(current_batch: batch, ...)
+	current_batch.is_firing = true
 
-	batch.is_firing = true
-	
-	local k, listener = next(batch.active)
+	local k, listener = next(current_batch.active)
 	while k do
 		if listener.connected and not listener.pending then
 			listener:Fire(...)
 		end
-		
-		k, listener = next(batch.active, k)
+
+		k, listener = next(current_batch.active, k)
 	end
 
-	batch.is_firing = false
+	current_batch.is_firing = false
 
-	batch:FlushPending()
-	batch:CleanUpAfterFire()
+	if current_batch.parent then
+		current_batch:FlushPending()
+		current_batch:CleanUpAfterFire()
+	end
+end
+
+function default:Fire(caller_id: string, ...)
+	local batch = self.batch_list[caller_id]
+	if not batch then return end
+
+	fire_batch(batch, ...)
 end
 
 function default:Destroy()
@@ -372,8 +374,8 @@ end
 
 function default:GetCurrentIds(): {string}
 	local ids = {}	
-	for id, batch in pairs(self.batch_list) do
-		table.insert(ids, id)
+	for id in pairs(self.batch_list) do
+		table_insert(ids, id)
 	end
 
 	return ids
@@ -475,8 +477,8 @@ end
 -- returns a table of the currently active caller_ids
 function registered:GetCurrentIds(): {string}
 	local ids = {}	
-	for id, batch in pairs(self.batch_list) do
-		table.insert(ids, id)
+	for id in pairs(self.batch_list) do
+		table_insert(ids, id)
 	end
 
 	return ids
@@ -506,26 +508,7 @@ function by_instance:Fire(instance: Instance, caller_id: string, ...)
 	local batch = reg.batch_list[caller_id]
 	if not batch then return end
 
-	batch.is_firing = true
-
-	local k, listener = next(batch.active)
-	while k do
-		if listener.connected and not listener.pending then
-			listener:Fire(...)
-		end
-		
-		k, listener = next(batch.active, k)
-	end
-
-	batch.is_firing = false
-
-	-- registry may have been destroyed during Fire()
-	if not batch.parent then
-		return
-	end
-
-	batch:FlushPending()
-	batch:CleanUpAfterFire()
+	fire_batch(batch, ...)
 end
 
 function by_instance:GetRegistered(instance: Instance)
@@ -584,7 +567,7 @@ function by_instance:Destroy()
 	-- Copy first to avoid mutating self.registered while iterating it.
 	local to_destroy = {}
 	for _, reg in pairs(self.registered) do
-		table.insert(to_destroy, reg)
+		to_destroy[#to_destroy + 1] = reg
 	end
 
 	for _, reg in ipairs(to_destroy) do
