@@ -10,39 +10,252 @@
 		TheRoyalDrew
 ]]
 
--- Coroutine runner pattern inspired by @stravant thread-reuse approach.
+-- Dynamic coroutine pool inspired by clanbob/Luau-Thread-Pool.
+-- This replaces the single shared runner thread with a bounded reusable pool
+-- plus an overload coroutine when the pool is saturated.
 
--- Shared coroutine reused to execute callbacks without creating a new coroutine per listener.
-
-local free_runner_thread: thread
+local coroutine_create = coroutine.create
+local coroutine_resume = coroutine.resume
+local coroutine_running = coroutine.running
+local coroutine_yield = coroutine.yield
+local math_clamp = math.clamp
+local os_clock = os.clock
+local table_clear = table.clear
 local table_insert = table.insert
+local task_spawn = task.spawn
+local task_wait = task.wait
 
-local function run(call_back: (...any) -> (), ...)
-	local cached_runner_thread = free_runner_thread
-	free_runner_thread = nil
+local DEFAULT_THREAD_POOL_SIZE_CAP = 16
+local DEFAULT_THREAD_POOL_IDLE_TIME = 30
 
-	call_back(...)
-	free_runner_thread = cached_runner_thread
+local Queue = {}
+Queue.__index = Queue
+
+function Queue.New()
+	return setmetatable({
+		items = {},
+		first = 1,
+		last = 1,
+		size = 0,
+	}, Queue)
 end
 
--- Runner coroutine body: waits for (callback, ...) and then executes it through run().
-local function wait_for_work()
-	while true do
-		run(coroutine.yield())
+function Queue:Enqueue(item)
+	self.items[self.last] = item
+	self.last += 1
+	self.size += 1
+	return item
+end
+
+function Queue:Dequeue()
+	if self.size <= 0 then return end
+
+	local item = self.items[self.first]
+	self.items[self.first] = nil
+	self.first += 1
+	self.size -= 1
+
+	if self.size <= 0 then
+		self.first = 1
+		self.last = 1
+	end
+
+	return item
+end
+
+function Queue:DropFront(amount: number): number
+	if amount <= 0 or self.size <= 0 then return 0 end
+
+	local removed = math.min(amount, self.size)
+	local first = self.first
+	local last_removed = first + removed - 1
+
+	for index = first, last_removed do
+		self.items[index] = nil
+	end
+
+	self.size -= removed
+	self.first = last_removed + 1
+
+	if self.size <= 0 then
+		self.first = 1
+		self.last = 1
+	end
+
+	return removed
+end
+
+function Queue:Destroy()
+	table_clear(self.items)
+	self.first = 1
+	self.last = 1
+	self.size = 0
+end
+
+local DynamicThreadPool = {}
+DynamicThreadPool.__index = DynamicThreadPool
+
+function DynamicThreadPool:_DetermineThreadPoolUsage()
+	if self.size_cap <= 0 then return end
+
+	local threads_not_in_use = self.threads.size
+	if threads_not_in_use < self.threads_not_used_since_last_audit then
+		self.threads_not_used_since_last_audit = threads_not_in_use
 	end
 end
 
--- Dispatches a listener callback via the shared runner coroutine.
+function DynamicThreadPool:_ScheduleWorkerAudit()
+	if self.idle_time <= 0 then return end
+	if self.is_auditing then return end
+
+	self.is_auditing = true
+	task_spawn(function()
+		while self.threads do
+			if self.idle_time <= 0 then
+				self.is_auditing = false
+				break
+			end
+
+			task_wait(self.idle_time)
+			if not self.threads then return end
+
+			local audit_time = os_clock()
+			local removed = self.threads:DropFront(self.threads_not_used_since_last_audit)
+			self.current_size -= removed
+			self.threads_not_used_since_last_audit = self.threads.size
+
+			if self.overload_thread and audit_time - self.used_overload_thread_time >= self.idle_time then
+				self.overload_thread = nil
+			end
+		end
+	end)
+end
+
+function DynamicThreadPool:_RunTask(fn: (...any) -> (), ...)
+	fn(...)
+end
+
+function DynamicThreadPool:_CreateWorker(): thread
+	return coroutine_create(function()
+		while true do
+			self:_RunTask(coroutine_yield())
+			if not self.threads then return end
+
+			if self.current_size > self.size_cap then
+				self.current_size -= 1
+				return
+			end
+
+			self.threads:Enqueue(coroutine_running())
+		end
+	end)
+end
+
+function DynamicThreadPool:_RunOverload(fn: (...any) -> (), ...)
+	local cached_overload_runner = self.overload_thread
+	self.overload_thread = nil
+
+	self:_RunTask(fn, ...)
+
+	self.overload_thread = cached_overload_runner
+end
+
+function DynamicThreadPool:_CreateOverloadThread(): thread
+	return coroutine_create(function()
+		while true do
+			self:_RunOverload(coroutine_yield())
+		end
+	end)
+end
+
+function DynamicThreadPool.new(size_cap: number?, idle_time: number?)
+	local resolved_size_cap = if size_cap == nil then DEFAULT_THREAD_POOL_SIZE_CAP else size_cap
+	local resolved_idle_time = if idle_time == nil then DEFAULT_THREAD_POOL_IDLE_TIME else idle_time
+
+	if resolved_size_cap < 0 then
+		error("Thread pool size cap must be greater than or equal to 0")
+	end
+
+	if resolved_idle_time < 0 then
+		error("Thread pool idle time must be greater than or equal to 0")
+	end
+
+	local self = setmetatable({
+		threads = Queue.New(),
+		overload_thread = nil,
+		size_cap = resolved_size_cap,
+		idle_time = resolved_idle_time,
+		threads_not_used_since_last_audit = 0,
+		used_overload_thread_time = os_clock(),
+		is_auditing = false,
+		current_size = 0,
+	}, DynamicThreadPool)
+
+	self:_ScheduleWorkerAudit()
+	return self
+end
+
+function DynamicThreadPool:AdjustSizeCap(new_size_cap: number)
+	if new_size_cap < 0 then
+		error("Thread pool size cap must be greater than or equal to 0")
+	end
+
+	if new_size_cap == self.size_cap then return end
+	self.size_cap = new_size_cap
+
+	local difference = self.current_size - self.size_cap
+	if difference <= 0 then return end
+
+	local removed = self.threads:DropFront(math.min(difference, self.threads.size))
+	self.current_size -= removed
+	self.threads_not_used_since_last_audit = math_clamp(
+		self.threads_not_used_since_last_audit - removed,
+		0,
+		self.size_cap
+	)
+end
+
+function DynamicThreadPool:Spawn(fn: (...any) -> (), ...)
+	local runner_thread: thread
+
+	if not self.overload_thread then
+		local thread = self.threads:Dequeue()
+		if thread then
+			runner_thread = thread
+			self:_DetermineThreadPoolUsage()
+		elseif self.size_cap > self.current_size then
+			local new_thread = self:_CreateWorker()
+			coroutine_resume(new_thread)
+			self.current_size += 1
+			runner_thread = new_thread
+		else
+			self.overload_thread = self:_CreateOverloadThread()
+			coroutine_resume(self.overload_thread)
+			runner_thread = self.overload_thread
+		end
+	else
+		runner_thread = self.overload_thread
+	end
+
+	if runner_thread == self.overload_thread then
+		self.used_overload_thread_time = os_clock()
+	end
+
+	task_spawn(runner_thread, fn, ...)
+end
+
+function DynamicThreadPool:Destroy()
+	if not self.threads then return end
+	self.threads:Destroy()
+	table_clear(self)
+	setmetatable(self, nil)
+end
+
+local listener_thread_pool = DynamicThreadPool.new()
+
 local function run_listener_in_runner_thread(listener: Listener, ...)
-	if not free_runner_thread then
-		free_runner_thread = coroutine.create(wait_for_work)
-		coroutine.resume(free_runner_thread) -- prime to first yield
-	end
-
-	task.spawn(free_runner_thread, listener.call_back, ...)
+	listener_thread_pool:Spawn(listener.call_back, ...)
 end
-
-
 
 
 local player_removed_connection: RBXScriptConnection
@@ -607,6 +820,26 @@ function CallBack.NewByInstance(): by_instance
 	}, by_instance)
 end
 
+
+
+function CallBack.ConfigureThreadPool(size_cap: number?, idle_time: number?)
+	if size_cap ~= nil then
+		listener_thread_pool:AdjustSizeCap(size_cap)
+	end
+
+	if idle_time ~= nil then
+		if idle_time < 0 then
+			error("Thread pool idle time must be greater than or equal to 0")
+		end
+
+		listener_thread_pool.idle_time = idle_time
+		listener_thread_pool:_ScheduleWorkerAudit()
+	end
+end
+
+function CallBack.GetThreadPoolSize()
+	return listener_thread_pool.current_size
+end
 
 -- Types
 
