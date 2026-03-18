@@ -140,6 +140,15 @@ Fires all listeners in the group.
 ### `events:Destroy()`
 Destroys all groups/listeners in this dispatcher.
 
+### `CallBack.ConfigureThreadPool(sizeCap: number?, idleTime: number?)`
+Adjusts the shared callback worker pool used by listener dispatch.
+
+- `sizeCap`: maximum reusable worker count before overflow uses the overload coroutine
+- `idleTime`: seconds before idle workers/overflow runner are eligible for cleanup
+
+### `CallBack.GetThreadPoolSize() -> number`
+Returns the current number of reusable worker coroutines allocated in the shared pool.
+
 ---
 
 ## Player dispatcher (`NewByPlayer`)
@@ -216,7 +225,7 @@ The module guarantees these semantics:
 - **Mutation-safe firing**: disconnects during `Fire` are safe.
 - **Pending listeners**: listeners added mid-fire execute next cycle.
 - **`once` correctness**: once listeners disconnect before execution.
-- **Async callbacks**: callbacks run via `task.spawn` on a shared runner coroutine.
+- **Async callbacks**: callbacks run via `task.spawn` on a dynamic coroutine pool with reusable workers and overload fallback.
 - **Error reporting**: callback errors are `xpcall` wrapped and warned with traceback.
 
 ---
