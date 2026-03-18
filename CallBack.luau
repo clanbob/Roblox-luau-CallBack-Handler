@@ -12,20 +12,22 @@
 
 -- Dynamic coroutine pool by clanbob/Luau-Thread-Pool TheRoyalDrew.
 -- This replaces the single shared runner thread with a bounded reusable pool
--- plus an overload coroutine when the pool is saturated.
 
 local coroutine_create = coroutine.create
 local coroutine_resume = coroutine.resume
 local coroutine_running = coroutine.running
 local coroutine_yield = coroutine.yield
+
 local math_clamp = math.clamp
 local os_clock = os.clock
+
 local table_clear = table.clear
 local table_insert = table.insert
+
 local task_spawn = task.spawn
 local task_wait = task.wait
 
-local DEFAULT_THREAD_POOL_SIZE_CAP = 16
+local DEFAULT_THREAD_POOL_SIZE_CAP = 999 -- set to 999 for unbound growth as default
 local DEFAULT_THREAD_POOL_IDLE_TIME = 30
 
 local Queue = {}
@@ -121,7 +123,7 @@ function DynamicThreadPool:_ScheduleWorkerAudit()
 
 			local audit_time = os_clock()
 			local removed = self.threads:DropFront(self.threads_not_used_since_last_audit)
-			
+
 			self.current_size -= removed
 			self.threads_not_used_since_last_audit = self.threads.size
 
@@ -208,7 +210,7 @@ function DynamicThreadPool:AdjustSizeCap(new_size_cap: number)
 	if difference <= 0 then return end
 
 	local removed = self.threads:DropFront(math.min(difference, self.threads.size))
-	
+
 	self.current_size -= removed
 	self.threads_not_used_since_last_audit = math_clamp(
 		self.threads_not_used_since_last_audit - removed,
@@ -222,20 +224,20 @@ function DynamicThreadPool:Spawn(fn: (...any) -> (), ...)
 
 	if not self.overload_thread then
 		local thread = self.threads:Dequeue()
-		
+
 		if thread then
 			runner_thread = thread
-			
+
 			self:_DetermineThreadPoolUsage()
 		elseif self.size_cap > self.current_size then
 			local new_thread = self:_CreateWorker()
 			coroutine_resume(new_thread)
-			
+
 			self.current_size += 1
 			runner_thread = new_thread
 		else
 			self.overload_thread = self:_CreateOverloadThread()
-			
+
 			coroutine_resume(self.overload_thread)
 			runner_thread = self.overload_thread
 		end
@@ -819,9 +821,10 @@ function CallBack.NewByInstance(): by_instance
 	}, by_instance)
 end
 
+-- thread pool path 
+CallBack.GlobalThreadPool = { }
 
-
-function CallBack.ConfigureThreadPool(size_cap: number?, idle_time: number?)
+function CallBack.GlobalThreadPool:ConfigureThreadPool(size_cap: number?, idle_time: number?)
 	if size_cap ~= nil then
 		listener_thread_pool:AdjustSizeCap(size_cap)
 	end
@@ -836,7 +839,7 @@ function CallBack.ConfigureThreadPool(size_cap: number?, idle_time: number?)
 	end
 end
 
-function CallBack.GetThreadPoolSize()
+function CallBack.GlobalThreadPool:GetThreadPoolSize()
 	return listener_thread_pool.current_size
 end
 
