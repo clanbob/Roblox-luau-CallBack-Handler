@@ -10,7 +10,7 @@
 		TheRoyalDrew
 ]]
 
--- Dynamic coroutine pool inspired by clanbob/Luau-Thread-Pool.
+-- Dynamic coroutine pool by clanbob/Luau-Thread-Pool TheRoyalDrew.
 -- This replaces the single shared runner thread with a bounded reusable pool
 -- plus an overload coroutine when the pool is saturated.
 
