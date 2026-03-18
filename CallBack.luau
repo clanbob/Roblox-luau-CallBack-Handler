@@ -110,7 +110,7 @@ function DynamicThreadPool:_ScheduleWorkerAudit()
 
 	self.is_auditing = true
 	task_spawn(function()
-		while self.threads do
+		while self.threads do		
 			if self.idle_time <= 0 then
 				self.is_auditing = false
 				break
@@ -121,6 +121,7 @@ function DynamicThreadPool:_ScheduleWorkerAudit()
 
 			local audit_time = os_clock()
 			local removed = self.threads:DropFront(self.threads_not_used_since_last_audit)
+			
 			self.current_size -= removed
 			self.threads_not_used_since_last_audit = self.threads.size
 
@@ -131,14 +132,14 @@ function DynamicThreadPool:_ScheduleWorkerAudit()
 	end)
 end
 
-function DynamicThreadPool:_RunTask(fn: (...any) -> (), ...)
+local function run(fn, ...)
 	fn(...)
 end
 
 function DynamicThreadPool:_CreateWorker(): thread
 	return coroutine_create(function()
 		while true do
-			self:_RunTask(coroutine_yield())
+			run(coroutine_yield())
 			if not self.threads then return end
 
 			if self.current_size > self.size_cap then
@@ -155,7 +156,7 @@ function DynamicThreadPool:_RunOverload(fn: (...any) -> (), ...)
 	local cached_overload_runner = self.overload_thread
 	self.overload_thread = nil
 
-	self:_RunTask(fn, ...)
+	fn(...)
 
 	self.overload_thread = cached_overload_runner
 end
@@ -207,11 +208,12 @@ function DynamicThreadPool:AdjustSizeCap(new_size_cap: number)
 	if difference <= 0 then return end
 
 	local removed = self.threads:DropFront(math.min(difference, self.threads.size))
+	
 	self.current_size -= removed
 	self.threads_not_used_since_last_audit = math_clamp(
 		self.threads_not_used_since_last_audit - removed,
 		0,
-		self.size_cap
+		self.size_cap :: number
 	)
 end
 
@@ -220,16 +222,20 @@ function DynamicThreadPool:Spawn(fn: (...any) -> (), ...)
 
 	if not self.overload_thread then
 		local thread = self.threads:Dequeue()
+		
 		if thread then
 			runner_thread = thread
+			
 			self:_DetermineThreadPoolUsage()
 		elseif self.size_cap > self.current_size then
 			local new_thread = self:_CreateWorker()
 			coroutine_resume(new_thread)
+			
 			self.current_size += 1
 			runner_thread = new_thread
 		else
 			self.overload_thread = self:_CreateOverloadThread()
+			
 			coroutine_resume(self.overload_thread)
 			runner_thread = self.overload_thread
 		end
@@ -242,13 +248,6 @@ function DynamicThreadPool:Spawn(fn: (...any) -> (), ...)
 	end
 
 	task_spawn(runner_thread, fn, ...)
-end
-
-function DynamicThreadPool:Destroy()
-	if not self.threads then return end
-	self.threads:Destroy()
-	table_clear(self)
-	setmetatable(self, nil)
 end
 
 local listener_thread_pool = DynamicThreadPool.new()
@@ -380,13 +379,13 @@ function batch.New(self, caller_id)
 	return setmetatable({
 		caller_id = caller_id,
 		parent = self,
-			
+
 		next_index = 0,	-- Monotonic id used as a stable hash-key for listeners.
-			
+
 		is_firing = false,
 		destroyed = false,
 		dirty = false,
-		
+
 		dirty_listeners = {}, -- {index : number}		
 
 		pending = {},
@@ -413,14 +412,14 @@ end
 function batch:RemoveListener(index: number)
 	self.pending[index] = nil
 	self.active[index] = nil
-	
+
 	self:CleanUp()
 end
 
 -- Promote pending -> active after Fire().
 function batch:FlushPending()
 	if not next(self.pending) then return end
-	
+
 	for _, listener in pairs(self.pending) do
 		if listener.connected then
 			listener.pending = false
@@ -446,10 +445,10 @@ function batch:CleanUpAfterFire()
 			self.pending[index] = nil
 			self.active[index] = nil
 		end
-		
+
 		table.clear(self.dirty_listeners)
 	end
-	
+
 	self:CleanUp()
 end
 
@@ -514,7 +513,7 @@ function Listener:Fire(...)
 	if self.once then
 		self:Disconnect()
 	end
-	
+
 	run_listener_in_runner_thread(self, ...)
 end
 
@@ -769,7 +768,7 @@ end
 function by_instance:Wait(instance : Instance, caller_id : string)
 	if not instance or not caller_id then return end
 	local running_thread = coroutine.running()
-	
+
 	self:Listen(instance, caller_id, true, function(...)
 		task.spawn(running_thread, ...)
 	end)
