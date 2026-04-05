@@ -511,7 +511,7 @@ end
 
 
 -- Fires a listener asynchronously.
-function Listener:Fire(...)
+function Listener.Fire(self, ...)
 	if self.once then
 		self:Disconnect()
 	end
@@ -551,7 +551,7 @@ local function fire_batch(current_batch: batch, ...)
 	local k, listener = next(current_batch.active)
 	while k do
 		if listener.connected and not listener.pending then
-			listener:Fire(...)
+			Listener.Fire(listener, ...)
 		end
 
 		k, listener = next(current_batch.active, k)
@@ -573,8 +573,13 @@ function default:Fire(caller_id: string, ...)
 end
 
 function default:Destroy()
-	for _, batches in pairs(self.batch_list) do
-		batches:Destroy()
+	local to_destroy = {}
+	for _, batch in pairs(self.batch_list) do
+		table_insert(to_destroy, batch)
+	end
+	
+	for _, batch in pairs(to_destroy) do
+		batch:Destroy()
 	end
 
 	table.clear(self.batch_list)
