@@ -135,7 +135,7 @@ function DynamicThreadPool:_ScheduleWorkerAudit()
 end
 
 local function run(fn, ...)
-	fn(...)
+	pcall(fn, ...)
 end
 
 function DynamicThreadPool:_CreateWorker(): thread
